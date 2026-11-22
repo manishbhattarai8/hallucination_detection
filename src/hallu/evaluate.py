@@ -72,28 +72,42 @@ def _load(cfg: RunConfig):
     return labels, sc
 
 
+def _finite(df: pd.DataFrame, det: str) -> tuple[pd.Series, pd.Series]:
+    s = pd.to_numeric(df[det], errors="coerce").astype(float)
+    return s, s.notna() & np.isfinite(s)
+
+
 def _metric_rows(cfg: RunConfig, labels: dict, sc: pd.DataFrame) -> list[dict]:
+    """Per-detector rows on each detector's own finite rows ("test", "all"), plus
+    "test_common"/"all_common": every detector on the rows where all of them are finite."""
     n_correct = sum(1 for v in labels.values() if v == 0)
     test_pos = split_index(cfg, sc.qid.tolist())["test"]
     parts = {"test": sc.iloc[test_pos], "all": sc}
+    avail = {split: [d for d in DETECTORS if d in df and not (d == "probe" and split == "all")]
+             for split, df in parts.items()}
+
+    def row(det, split, df, s, ok):
+        y = df.label[ok].to_numpy()
+        n_pos = int(y.sum())
+        return {
+            "config_id": cfg.config_id, "family": cfg.family, "size_b": cfg.size_b,
+            "precision": cfg.precision, "dataset": cfg.dataset, "detector": det,
+            "split": split, "n": int(ok.sum()), "n_pos": n_pos,
+            "n_neg": int(ok.sum()) - n_pos, "n_dropped_nonfinite": int((~ok).sum()),
+            **_ci_fields(y, s[ok].to_numpy()), "low_confidence": n_correct < 100,
+        }
+
     rows = []
     for det in DETECTORS:
         for split, df in parts.items():
-            if det == "probe" and split == "all":
-                continue
-            if det not in df:
-                continue
-            s = pd.to_numeric(df[det], errors="coerce").astype(float)
-            ok = s.notna() & np.isfinite(s)
-            y = df.label[ok].to_numpy()
-            n_pos = int(y.sum())
-            rows.append({
-                "config_id": cfg.config_id, "family": cfg.family, "size_b": cfg.size_b,
-                "precision": cfg.precision, "dataset": cfg.dataset, "detector": det,
-                "split": split, "n": int(ok.sum()), "n_pos": n_pos,
-                "n_neg": int(ok.sum()) - n_pos, "n_dropped_nonfinite": int((~ok).sum()),
-                **_ci_fields(y, s[ok].to_numpy()), "low_confidence": n_correct < 100,
-            })
+            if det in avail[split]:
+                rows.append(row(det, split, df, *_finite(df, det)))
+    for split, df in parts.items():
+        common = pd.Series(True, index=df.index)
+        for det in avail[split]:
+            common &= _finite(df, det)[1]
+        for det in avail[split]:
+            rows.append(row(det, f"{split}_common", df, _finite(df, det)[0], common))
     return rows
 
 

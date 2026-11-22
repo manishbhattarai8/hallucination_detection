@@ -96,7 +96,7 @@ def test_evaluate_grid_on_fake_runs(tmp_path, two_runs):
     m = pd.read_csv(s / "metrics.csv")
     assert set(m.detector) == {"neg_mean_logprob", "mean_entropy", "semantic_entropy", "probe"}
     assert m.n_dropped_nonfinite.max() == 1
-    assert (m[m.detector == "probe"].split == "test").all()
+    assert set(m[m.detector == "probe"].split) == {"test", "test_common"}
     allrows = m[(m.split == "all") & (m.detector == "mean_entropy")]
     assert (allrows.n == N).all()
     assert m.low_confidence.all()  # < 100 correct
@@ -247,3 +247,21 @@ def test_transfer_drops_nonfinite_acts(tmp_path, monkeypatch):
     assert len(t) == 1 and t.n_dropped_nonfinite_acts.iloc[0] == 2
     assert np.isfinite(t.auroc.iloc[0])
 
+
+def test_common_row_set_splits(tmp_path, monkeypatch):
+    c = _cfg(tmp_path, "fp16")
+    from hallu.data import split_ids
+    test = sorted(QIDS.index(q) for q in split_ids(QIDS, c.split_seed)["test"])
+    _fake_run(tmp_path, monkeypatch, c, 1, null_row=test[0], se_null_row=test[1])
+    evaluate_grid([c], out_dir=tmp_path / "summary")
+    m = pd.read_csv(tmp_path / "summary/metrics.csv").set_index(["detector", "split"])
+    n_test = len(test)
+    for det in ("neg_mean_logprob", "mean_entropy", "semantic_entropy"):
+        assert m.loc[(det, "all_common"), "n"] == N - 2
+        assert m.loc[(det, "test_common"), "n"] == n_test - 2
+    assert m.loc[("probe", "test_common"), "n"] == n_test - 2
+    assert ("probe", "all_common") not in m.index
+    # existing per-detector rows are unchanged
+    assert m.loc[("mean_entropy", "all"), "n"] == N
+    assert m.loc[("neg_mean_logprob", "all"), "n"] == N - 1
+    assert m.loc[("probe", "test"), "n"] == n_test
