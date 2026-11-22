@@ -17,6 +17,11 @@ FEW_SHOT: list[tuple[str, str]] = [
     ("How many legs does a spider have?", "Eight"),
 ]
 
+# Pinned Hub dataset commits (HfApi().dataset_info(...).sha on 2026-11-22), so the subset
+# id lists keep resolving to the same questions and aliases.
+TRIVIAQA_REVISION = "0f7faf33a3908546c6fd5b73a660e0f8ff173c2f"
+NQ_OPEN_REVISION = "5dd9790a83002ad084ddeb7c420dc716852c6f28"
+
 
 @dataclass(frozen=True)
 class Question:
@@ -53,7 +58,8 @@ def _load_all(dataset: str) -> dict[str, Question]:
     from datasets import load_dataset
 
     if dataset == "triviaqa":
-        ds = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation")
+        ds = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation",
+                          revision=TRIVIAQA_REVISION)
         return {
             r["question_id"]: Question(
                 r["question_id"], r["question"],
@@ -61,7 +67,8 @@ def _load_all(dataset: str) -> dict[str, Question]:
             for r in ds
         }
     if dataset == "nq_open":
-        ds = load_dataset("google-research-datasets/nq_open", split="validation")
+        ds = load_dataset("google-research-datasets/nq_open", split="validation",
+                          revision=NQ_OPEN_REVISION)
         return {
             f"nq_{i}": Question(f"nq_{i}", r["question"], _dedup(r["answer"]))
             for i, r in enumerate(ds)

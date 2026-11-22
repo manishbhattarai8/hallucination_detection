@@ -50,3 +50,20 @@ def test_stale_subset_file_raises_value_error(tmp_path, monkeypatch, ids):
     f.write_text(json.dumps(ids), encoding="utf-8")
     with pytest.raises(ValueError, match="triviaqa_n3_seed0.json"):
         hd.load_questions(cfg, subset_dir=tmp_path)
+
+
+def test_dataset_revisions_are_pinned(monkeypatch):
+    import datasets
+
+    seen = []
+
+    def fake_load(name, *args, **kw):
+        seen.append((name, kw.get("revision")))
+        return []
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load)
+    hd._load_all("triviaqa")
+    hd._load_all("nq_open")
+    assert seen == [("mandarjoshi/trivia_qa", hd.TRIVIAQA_REVISION),
+                    ("google-research-datasets/nq_open", hd.NQ_OPEN_REVISION)]
+    assert all(len(r) == 40 for _, r in seen)
