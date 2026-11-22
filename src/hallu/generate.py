@@ -66,47 +66,62 @@ def _left_pad(seqs: list[list[int]], pad_id: int, device):
 
 
 @torch.no_grad()
-def greedy_pass(model, tok, questions: list[Question], cfg: RunConfig) -> list[GreedyResult]:
+def greedy_generate(model, tok, batch: list[Question], cfg: RunConfig):
+    """Greedy decoding only; returns (encoded prompts, generated ids) for greedy_score."""
+    enc = tok([_prompt(tok, q) for q in batch], return_tensors="pt", padding=True,
+              add_special_tokens=False).to(model.device)
+    out = model.generate(**enc, **_gen_kwargs(tok, do_sample=False,
+                                              max_new_tokens=cfg.max_new_tokens))
+    return enc, out
+
+
+@torch.no_grad()
+def greedy_score(model, tok, batch: list[Question], cfg: RunConfig,
+                 generated) -> list[GreedyResult]:
+    """Scoring forward over prompt + truncated answer: hidden states and token stats."""
+    enc, out = generated
     layers = layer_indices(model.config.num_hidden_layers, cfg.layer_fracs)
+    width = enc["input_ids"].shape[1]
+
+    seqs, scored, answers = [], [], []
+    for i in range(len(batch)):
+        prompt_ids = enc["input_ids"][i][enc["attention_mask"][i].bool()].tolist()
+        new_ids = out[i, width:].tolist()
+        ans_ids = truncate_answer_ids(new_ids, tok)
+        s = ans_ids if ans_ids else new_ids[:1]
+        seqs.append(prompt_ids + s)
+        scored.append(s)
+        answers.append(ans_ids)
+
+    ids, mask = _left_pad(seqs, tok.pad_token_id, model.device)
+    pos = (mask.cumsum(-1) - 1).clamp(min=0)
+    fwd = model(input_ids=ids, attention_mask=mask, position_ids=pos,
+                output_hidden_states=True)
+    acts = torch.stack([fwd.hidden_states[j][:, -1, :].float().cpu() for j in layers], dim=1)
+    acts = acts.numpy().astype(np.float16)
+
+    results: list[GreedyResult] = []
+    for i, q in enumerate(batch):
+        k = len(scored[i])
+        lp, ent, bad = token_stats(fwd.logits[i, -k - 1:-1, :],
+                                   torch.tensor(scored[i], device=fwd.logits.device))
+        results.append(GreedyResult(
+            qid=q.qid,
+            answer=tok.decode(answers[i], skip_special_tokens=True).strip(),
+            empty_answer=not answers[i],
+            nonfinite=bad,
+            token_logprobs=lp,
+            token_entropies=ent,
+            acts=acts[i],
+        ))
+    return results
+
+
+def greedy_pass(model, tok, questions: list[Question], cfg: RunConfig) -> list[GreedyResult]:
     results: list[GreedyResult] = []
     for start in range(0, len(questions), cfg.batch_size):
         batch = questions[start:start + cfg.batch_size]
-        enc = tok([_prompt(tok, q) for q in batch], return_tensors="pt", padding=True,
-                  add_special_tokens=False).to(model.device)
-        out = model.generate(**enc, **_gen_kwargs(tok, do_sample=False,
-                                                  max_new_tokens=cfg.max_new_tokens))
-        width = enc["input_ids"].shape[1]
-
-        seqs, scored, answers = [], [], []
-        for i in range(len(batch)):
-            prompt_ids = enc["input_ids"][i][enc["attention_mask"][i].bool()].tolist()
-            new_ids = out[i, width:].tolist()
-            ans_ids = truncate_answer_ids(new_ids, tok)
-            s = ans_ids if ans_ids else new_ids[:1]
-            seqs.append(prompt_ids + s)
-            scored.append(s)
-            answers.append(ans_ids)
-
-        ids, mask = _left_pad(seqs, tok.pad_token_id, model.device)
-        pos = (mask.cumsum(-1) - 1).clamp(min=0)
-        fwd = model(input_ids=ids, attention_mask=mask, position_ids=pos,
-                    output_hidden_states=True)
-        acts = torch.stack([fwd.hidden_states[j][:, -1, :].float().cpu() for j in layers], dim=1)
-        acts = acts.numpy().astype(np.float16)
-
-        for i, q in enumerate(batch):
-            k = len(scored[i])
-            lp, ent, bad = token_stats(fwd.logits[i, -k - 1:-1, :],
-                                       torch.tensor(scored[i], device=fwd.logits.device))
-            results.append(GreedyResult(
-                qid=q.qid,
-                answer=tok.decode(answers[i], skip_special_tokens=True).strip(),
-                empty_answer=not answers[i],
-                nonfinite=bad,
-                token_logprobs=lp,
-                token_entropies=ent,
-                acts=acts[i],
-            ))
+        results += greedy_score(model, tok, batch, cfg, greedy_generate(model, tok, batch, cfg))
     return results
 
 

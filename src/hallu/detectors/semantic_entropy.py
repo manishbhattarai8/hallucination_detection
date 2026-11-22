@@ -71,6 +71,8 @@ class NLIJudge:
             logits = self.model(**enc).logits
         return (logits.argmax(-1) == self.entail_id).tolist()
 
+    # NLI runs sequentially, one pair per forward (documented ruling); batching the pairs
+    # would lower the measured semantic-entropy cost.
     def entails(self, question: str, a: str, b: str) -> bool:
         key = (question, a, b)
         if key not in self._cache:

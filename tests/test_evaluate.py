@@ -124,21 +124,26 @@ def test_cost_csv_from_fake_timing(tmp_path, two_runs):
     c16, c4 = two_runs
     tdir = tmp_path / "timing"
     for c, gpus in ((c16, 1), (c4, 2)):
-        rows = [{"qid": f"q{i}", "t_greedy": 1.0, "t_conf": 0.1 * (i + 1), "t_samples": 2.0,
-                 "t_nli": 1.0, "t_probe": 0.01, "peak_vram_gb": 1.0 + i} for i in range(3)]
+        rows = [{"qid": f"q{i}", "t_greedy": 1.0, "t_generate": 0.7, "t_score": 0.3,
+                 "t_conf": 0.1 * (i + 1), "t_samples": 2.0, "t_nli": 1.0, "t_probe": 0.01,
+                 "peak_vram_gb": 1.0 + i} for i in range(3)]
         rows.append({"summary": True, "gpu_name": "T4", "gpu_count": gpus})
         append_jsonl(tdir / f"{c.config_id}.jsonl", rows)
     evaluate_grid(two_runs, out_dir=tmp_path / "summary")
     c = pd.read_csv(tmp_path / "summary/cost.csv")
     assert set(c.config_id) == {c16.config_id}  # gpu_count 2 excluded
+    assert np.allclose(c.shared_s_mean, 0.7)
     se = c[c.detector == "semantic_entropy"].iloc[0]
     assert se.n_generations == 6 and se.extra_s_mean == pytest.approx(3.0)
-    assert se.total_s_mean == pytest.approx(4.0) and se.extra_s_std == pytest.approx(0.0)
+    assert se.total_s_mean == pytest.approx(3.7) and se.extra_s_std == pytest.approx(0.0)
     assert se.peak_vram_gb == 3.0
     nl = c[c.detector == "neg_mean_logprob"].iloc[0]
     assert nl.n_generations == 1
-    assert nl.extra_s_mean == pytest.approx(0.2)
+    assert nl.extra_s_mean == pytest.approx(0.5)  # t_score + t_conf
     assert nl.extra_s_std == pytest.approx(0.1)
+    assert nl.total_s_mean == pytest.approx(1.2)
+    pr = c[c.detector == "probe"].iloc[0]
+    assert pr.extra_s_mean == pytest.approx(0.31) and pr.total_s_mean == pytest.approx(1.01)
     assert "auroc" in c.columns and c.auroc.notna().all()
 
 

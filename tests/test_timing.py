@@ -67,13 +67,20 @@ def _fake_env(tmp_path, monkeypatch, n_q=10, probe=True):
     monkeypatch.setattr(T, "load_model", lambda m, p: loaded.append(m) or ("model", "tok"))
     calls = []
 
-    def greedy(model, tok, questions, c):
+    def gen(model, tok, questions, c):
         assert len(questions) == 1
         calls.append(questions[0].qid)
+        time.sleep(0.002)
+        return "generated"
+
+    def score(model, tok, questions, c, generated):
+        assert generated == "generated" and len(questions) == 1
+        time.sleep(0.001)
         return [GreedyResult(questions[0].qid, "a", False, False, [-0.5, -1.0], [1.0, 2.0],
                              np.zeros((4, 8), dtype=np.float16))]
 
-    monkeypatch.setattr(T, "greedy_pass", greedy)
+    monkeypatch.setattr(T, "greedy_generate", gen)
+    monkeypatch.setattr(T, "greedy_score", score)
     monkeypatch.setattr(T, "sample_pass", lambda m, t, q, c: ["a"] * 5)
 
     class Judge:
@@ -94,8 +101,11 @@ def test_timing_run_fake_pipeline(tmp_path, monkeypatch):
     rows = read_jsonl(out)
     assert [r.get("qid") for r in rows[:3]] == ["q0", "q1", "q2"]
     for r in rows[:3]:
-        for k in ("t_greedy", "t_conf", "t_samples", "t_nli", "t_probe", "peak_vram_gb"):
+        for k in ("t_greedy", "t_generate", "t_score", "t_conf", "t_samples", "t_nli",
+                  "t_probe", "peak_vram_gb"):
             assert math.isfinite(r[k]) and r[k] >= 0
+        assert r["t_greedy"] == pytest.approx(r["t_generate"] + r["t_score"])
+        assert r["t_generate"] > 0.0015 and r["t_score"] > 0.0005
     assert rows[3]["summary"] is True and "gpu_name" in rows[3] and "gpu_count" in rows[3]
     assert len(rows) == 4
     # rerun starts fresh

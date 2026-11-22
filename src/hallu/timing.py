@@ -1,4 +1,10 @@
-"""Controlled cost measurement: batch size 1 on a single GPU, synchronized timers."""
+"""Controlled cost measurement: batch size 1 on a single GPU, synchronized timers.
+
+Greedy decoding (t_generate) and the scoring forward (t_score: hidden states + token
+stats) are timed separately; t_greedy = t_generate + t_score. The scoring forward is
+attributed to confidence/probe; in deployment it can be folded into generate via
+output_scores/output_hidden_states.
+"""
 from __future__ import annotations
 
 import json
@@ -14,7 +20,7 @@ from .config import RunConfig, run_dir
 from .data import load_questions
 from .detectors.confidence import mean_entropy, neg_mean_logprob
 from .detectors.semantic_entropy import NLIJudge
-from .generate import greedy_pass, sample_pass
+from .generate import greedy_generate, greedy_score, sample_pass
 from .io import append_jsonl, env_info
 from .model import load_model
 
@@ -39,8 +45,10 @@ def cuda_timer():
 
 
 def _measure(model, tok, judge, probe, pos: int, q, cfg: RunConfig) -> dict:
-    with cuda_timer() as t_greedy:
-        g = greedy_pass(model, tok, [q], cfg)[0]
+    with cuda_timer() as t_generate:
+        generated = greedy_generate(model, tok, [q], cfg)
+    with cuda_timer() as t_score:
+        g = greedy_score(model, tok, [q], cfg, generated)[0]
     with cuda_timer() as t_conf:
         neg_mean_logprob(g.token_logprobs)
         mean_entropy(g.token_entropies)
@@ -51,7 +59,9 @@ def _measure(model, tok, judge, probe, pos: int, q, cfg: RunConfig) -> dict:
     x = np.asarray(g.acts[pos], dtype=np.float32).reshape(1, -1)
     with cuda_timer() as t_probe:
         probe.predict_proba(x)
-    return {"qid": q.qid, "t_greedy": t_greedy.seconds, "t_conf": t_conf.seconds,
+    return {"qid": q.qid, "t_greedy": t_generate.seconds + t_score.seconds,
+            "t_generate": t_generate.seconds, "t_score": t_score.seconds,
+            "t_conf": t_conf.seconds,
             "t_samples": t_samples.seconds, "t_nli": t_nli.seconds,
             "t_probe": t_probe.seconds}
 

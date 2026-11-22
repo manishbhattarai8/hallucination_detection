@@ -172,8 +172,11 @@ def _transfer_rows(cfgs: list[RunConfig], data: dict, missing: list) -> list[dic
     return rows
 
 
-_EXTRA = {"neg_mean_logprob": ["t_conf"], "mean_entropy": ["t_conf"],
-          "semantic_entropy": ["t_samples", "t_nli"], "probe": ["t_probe"]}
+# Shared per-question cost is greedy decoding (t_generate). The scoring forward (t_score)
+# is attributed to confidence/probe; in deployment it can be folded into generate via
+# output_scores/output_hidden_states.
+_EXTRA = {"neg_mean_logprob": ["t_score", "t_conf"], "mean_entropy": ["t_score", "t_conf"],
+          "semantic_entropy": ["t_samples", "t_nli"], "probe": ["t_score", "t_probe"]}
 
 
 def _cost_rows(cfgs: list[RunConfig], metrics: pd.DataFrame, missing: list) -> list[dict]:
@@ -203,13 +206,17 @@ def _cost_rows(cfgs: list[RunConfig], metrics: pd.DataFrame, missing: list) -> l
         if timed.empty:
             skip("no timed rows")
             continue
+        if not {"t_generate", "t_score"} <= set(timed.columns):
+            skip("timing rows lack t_generate/t_score (old format); rerun timing")
+            continue
         for det, cols in _EXTRA.items():
             extra = timed[cols].sum(axis=1)
-            total = timed["t_greedy"] + extra
+            total = timed["t_generate"] + extra
             hit = metrics[(metrics.config_id == cfg.config_id) & (metrics.detector == det)
                           & (metrics.split == "test")]
             rows.append({
                 "config_id": cfg.config_id, "detector": det,
+                "shared_s_mean": timed["t_generate"].mean(),
                 "extra_s_mean": extra.mean(), "extra_s_std": extra.std(ddof=1),
                 "total_s_mean": total.mean(), "total_s_std": total.std(ddof=1),
                 "n_generations": 6 if det == "semantic_entropy" else 1,
