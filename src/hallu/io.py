@@ -7,9 +7,21 @@ from pathlib import Path
 from typing import Iterable
 
 
+def _truncate_partial_tail(path: Path) -> None:
+    """Drop a trailing line lacking a newline (crash mid-write) so appends stay line-aligned."""
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    with open(path, "rb+") as f:
+        data = f.read()
+        if data.endswith(b"\n"):
+            return
+        f.truncate(data.rfind(b"\n") + 1)
+
+
 def append_jsonl(path, rows: Iterable[dict]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _truncate_partial_tail(path)
     with open(path, "a", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
@@ -18,14 +30,13 @@ def append_jsonl(path, rows: Iterable[dict]) -> None:
 
 
 def read_jsonl(path) -> list[dict]:
-    """Read rows; a malformed final line (crash mid-write) is skipped, others raise."""
-    lines = Path(path).read_text(encoding="utf-8").split("\n")
-    lines = [ln for ln in lines if ln.strip()]
+    """Read rows; a malformed/undecodable final line (crash mid-write) is skipped, others raise."""
+    lines = [ln for ln in Path(path).read_bytes().split(b"\n") if ln.strip()]
     rows = []
     for i, ln in enumerate(lines):
         try:
-            rows.append(json.loads(ln))
-        except json.JSONDecodeError:
+            rows.append(json.loads(ln.decode("utf-8")))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             if i == len(lines) - 1:
                 break
             raise

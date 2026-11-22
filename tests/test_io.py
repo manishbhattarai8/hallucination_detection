@@ -38,3 +38,30 @@ def test_write_json(tmp_path):
 def test_env_info_has_versions():
     e = env_info()
     assert {"python", "torch", "transformers", "gpu_name"} <= e.keys()
+
+
+def test_append_after_truncated_tail_repairs_file(tmp_path):
+    p = tmp_path / "x.jsonl"
+    append_jsonl(p, [{"qid": "a"}, {"qid": "b"}])
+    with open(p, "a") as f:
+        f.write('{"qid": "c", "ans')
+    append_jsonl(p, [{"qid": "c"}])
+    assert [r["qid"] for r in read_jsonl(p)] == ["a", "b", "c"]
+    assert done_ids(p) == {"a", "b", "c"}
+    append_jsonl(p, [{"qid": "d"}])
+    assert [r["qid"] for r in read_jsonl(p)] == ["a", "b", "c", "d"]
+
+
+def test_append_after_truncated_only_line(tmp_path):
+    p = tmp_path / "x.jsonl"
+    p.write_bytes(b'{"qid": "a", "an')
+    append_jsonl(p, [{"qid": "b"}])
+    assert [r["qid"] for r in read_jsonl(p)] == ["b"]
+
+
+def test_tail_cut_mid_multibyte_char_is_ignored(tmp_path):
+    p = tmp_path / "x.jsonl"
+    append_jsonl(p, [{"qid": "a", "answer": "café"}])
+    with open(p, "ab") as f:
+        f.write(b'{"answer": "caf\xc3')
+    assert [r["qid"] for r in read_jsonl(p)] == ["a"]
