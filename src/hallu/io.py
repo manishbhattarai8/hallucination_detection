@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import platform
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -62,7 +64,21 @@ def _version(mod: str):
         return None
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _git(*args: str) -> str | None:
+    try:
+        r = subprocess.run(["git", *args], cwd=_REPO_ROOT, capture_output=True, text=True,
+                           timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
 def env_info() -> dict:
+    sha = _git("rev-parse", "HEAD")
+    status = _git("status", "--porcelain") if sha else None
     info = {
         "python": platform.python_version(),
         "torch": _version("torch"),
@@ -70,6 +86,8 @@ def env_info() -> dict:
         "bitsandbytes": _version("bitsandbytes"),
         "datasets": _version("datasets"),
         "sklearn": _version("sklearn"),
+        "git_sha": sha.strip() if sha else None,
+        "git_dirty": bool(status.strip()) if status is not None else None,
         "gpu_name": "cpu",
         "gpu_count": 0,
     }
@@ -78,6 +96,15 @@ def env_info() -> dict:
         if torch.cuda.is_available():
             info["gpu_name"] = torch.cuda.get_device_name(0)
             info["gpu_count"] = torch.cuda.device_count()
-    except Exception:
-        pass
+    except Exception as e:  # recorded, not hidden: a broken CUDA setup must be visible
+        info["gpu_error"] = f"{type(e).__name__}: {e}"
     return info
+
+
+def record_meta(run_dir, stage: str, config: dict, **extra) -> dict:
+    """Write meta.json (latest invocation) and append the same record to meta_history.jsonl."""
+    rec = {"stage": stage, "time_utc": datetime.now(timezone.utc).isoformat(),
+           "config": config, "env": env_info(), **extra}
+    write_json(Path(run_dir) / "meta.json", rec)
+    append_jsonl(Path(run_dir) / "meta_history.jsonl", [rec])
+    return rec

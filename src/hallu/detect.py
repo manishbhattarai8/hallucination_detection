@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 import joblib
@@ -15,7 +16,7 @@ from hallu.detectors.confidence import mean_entropy, neg_mean_logprob
 from hallu.detectors.probe import train_select_probe
 from hallu.detectors.semantic_entropy import NLIJudge
 from hallu.generate import load_acts
-from hallu.io import append_jsonl, done_ids, read_jsonl
+from hallu.io import append_jsonl, done_ids, env_info, read_jsonl, record_meta
 
 
 def _clean(x):
@@ -96,12 +97,14 @@ def _probe_step(cfg: RunConfig, rd: Path, scores_path: Path) -> None:
         "n_train_qids": len(kq),
         "n_total": len(full),
         "n_dropped_nonfinite_acts": n_dropped,
+        "git_sha": env_info()["git_sha"],
     }
     probe_json.write_text(_dump(meta), encoding="utf-8")
 
 
 def detect_run(cfg: RunConfig, nli: NLIJudge | None = None) -> Path:
     rd = run_dir(cfg)
+    record_meta(rd, "detect", asdict(cfg))
     scores_path = rd / "scores.jsonl"
     qtext = {q.qid: q.question for q in load_questions(cfg)}
     gens = read_jsonl(rd / "generations.jsonl")

@@ -107,6 +107,9 @@ def test_timing_run_fake_pipeline(tmp_path, monkeypatch):
         assert r["t_greedy"] == pytest.approx(r["t_generate"] + r["t_score"])
         assert r["t_generate"] > 0.0015 and r["t_score"] > 0.0005
     assert rows[3]["summary"] is True and "gpu_name" in rows[3] and "gpu_count" in rows[3]
+    assert "git_sha" in rows[3] and "git_dirty" in rows[3]
+    hist = read_jsonl(run_dir(cfg) / "meta_history.jsonl")
+    assert [h["stage"] for h in hist] == ["timing"]
     assert len(rows) == 4
     # rerun starts fresh
     timing_run(cfg, n_warmup=2, n_timed=3)

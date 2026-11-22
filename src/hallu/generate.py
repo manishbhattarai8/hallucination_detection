@@ -13,7 +13,7 @@ from transformers import LogitsProcessor, LogitsProcessorList
 
 from .config import RunConfig, run_dir
 from .data import Question, build_messages, load_questions
-from .io import append_jsonl, done_ids, env_info, write_json
+from .io import append_jsonl, done_ids, record_meta
 from .model import layer_indices, load_model, token_stats, truncate_answer_ids
 
 
@@ -199,7 +199,6 @@ def load_acts(run_dir: Path) -> tuple[list[str], np.ndarray]:
 
 def generate_run(cfg: RunConfig, limit: int | None = None) -> Path:
     rd = run_dir(cfg)
-    write_json(rd / "meta.json", {"config": asdict(cfg), "env": env_info()})
     gen_path = rd / "generations.jsonl"
     questions = load_questions(cfg)
     if limit is not None:
@@ -207,9 +206,11 @@ def generate_run(cfg: RunConfig, limit: int | None = None) -> Path:
     done = done_ids(gen_path)
     todo = [q for q in questions if q.qid not in done]
     if not todo:
+        record_meta(rd, "generate", asdict(cfg))
         return rd
 
     model, tok = load_model(cfg.model, cfg.precision)
+    record_meta(rd, "generate", asdict(cfg), model_dtype=str(model.dtype))
     acts_dir = rd / "acts"
     acts_dir.mkdir(exist_ok=True)
     consecutive_fail = 0

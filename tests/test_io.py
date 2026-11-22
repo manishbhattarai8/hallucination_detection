@@ -65,3 +65,46 @@ def test_tail_cut_mid_multibyte_char_is_ignored(tmp_path):
     with open(p, "ab") as f:
         f.write(b'{"answer": "caf\xc3')
     assert [r["qid"] for r in read_jsonl(p)] == ["a"]
+
+
+def test_env_info_records_git_provenance():
+    e = env_info()
+    assert {"git_sha", "git_dirty"} <= e.keys()
+    assert e["git_sha"] is None or (len(e["git_sha"]) == 40 and e["git_dirty"] in (True, False))
+
+
+def test_env_info_git_unavailable(monkeypatch):
+    import subprocess
+
+    import hallu.io as hio
+
+    def boom(*a, **k):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(hio.subprocess, "run", boom)
+    e = env_info()
+    assert e["git_sha"] is None and e["git_dirty"] is None
+
+
+def test_env_info_records_gpu_error(monkeypatch):
+    import torch
+
+    def boom():
+        raise RuntimeError("driver exploded")
+
+    monkeypatch.setattr(torch.cuda, "is_available", boom)
+    e = env_info()
+    assert "driver exploded" in e["gpu_error"] and e["gpu_name"] == "cpu"
+
+
+def test_record_meta_appends_history(tmp_path):
+    from hallu.io import record_meta
+
+    record_meta(tmp_path, "generate", {"a": 1}, model_dtype="torch.float16")
+    record_meta(tmp_path, "detect", {"a": 1})
+    hist = read_jsonl(tmp_path / "meta_history.jsonl")
+    assert [h["stage"] for h in hist] == ["generate", "detect"]
+    assert hist[0]["model_dtype"] == "torch.float16" and "model_dtype" not in hist[1]
+    assert {"time_utc", "config", "env"} <= hist[1].keys()
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["stage"] == "detect" and meta["config"] == {"a": 1} and "env" in meta

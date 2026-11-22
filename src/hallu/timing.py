@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import time
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 
 import joblib
@@ -21,7 +22,7 @@ from .data import load_questions
 from .detectors.confidence import mean_entropy, neg_mean_logprob
 from .detectors.semantic_entropy import NLIJudge
 from .generate import greedy_generate, greedy_score, sample_pass
-from .io import append_jsonl, env_info
+from .io import append_jsonl, record_meta
 from .model import load_model
 
 
@@ -95,6 +96,7 @@ def timing_run(cfg: RunConfig, n_warmup: int = 5, n_timed: int = 100) -> Path:
     out.write_text("", encoding="utf-8")
 
     model, tok = load_model(cfg.model, cfg.precision)
+    rec = record_meta(rd, "timing", asdict(cfg), model_dtype=str(getattr(model, "dtype", None)))
     judge = NLIJudge()
     for q in warm:
         _measure(model, tok, judge, probe, pos, q, cfg)
@@ -107,7 +109,8 @@ def timing_run(cfg: RunConfig, n_warmup: int = 5, n_timed: int = 100) -> Path:
         row = _measure(model, tok, judge, probe, pos, q, cfg)
         row["peak_vram_gb"] = torch.cuda.max_memory_allocated() / 1e9 if cuda else 0.0
         append_jsonl(out, [row])
-    env = env_info()
+    env = rec["env"]
     append_jsonl(out, [{"summary": True, "gpu_name": env.get("gpu_name"),
-                        "gpu_count": env.get("gpu_count")}])
+                        "gpu_count": env.get("gpu_count"), "git_sha": env.get("git_sha"),
+                        "git_dirty": env.get("git_dirty")}])
     return out

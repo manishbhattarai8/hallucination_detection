@@ -163,3 +163,11 @@ def test_nonfinite_acts_dropped_from_probe(tmp_path, monkeypatch):
     assert pj["chosen_layer_pos"] >= 0 and (rd / "probe.joblib").exists()
     rows = {r["qid"]: r for r in read_jsonl(rd / "scores.jsonl")}
     assert rows[test_q[0]]["probe"] is None and rows[test_q[1]]["probe"] is not None
+
+
+def test_detect_records_history_and_probe_git_sha(tmp_path, monkeypatch):
+    cfg, rd, qids = _build(tmp_path, monkeypatch)
+    D.detect_run(cfg, nli=StubJudge())
+    hist = read_jsonl(rd / "meta_history.jsonl")
+    assert [h["stage"] for h in hist] == ["detect"]
+    assert "git_sha" in json.loads((rd / "probe.json").read_text())

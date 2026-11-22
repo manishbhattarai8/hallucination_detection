@@ -240,3 +240,14 @@ def test_qwen_prompt_unchanged_by_date_string():
     before = tok.apply_chat_template(build_messages(q.question), add_generation_prompt=True,
                                      tokenize=False)
     assert G._prompt(tok, q) == before
+
+
+def test_generate_appends_meta_history(tmp_path, monkeypatch):
+    G, cfg = _harness(tmp_path, monkeypatch, n_q=3, batch_size=2)
+    G.generate_run(cfg, limit=1)
+    G.generate_run(cfg)
+    hist = read_jsonl(run_dir(cfg) / "meta_history.jsonl")
+    assert len(hist) == 2 and all(h["stage"] == "generate" for h in hist)
+    assert all(h["model_dtype"] == "torch.float32" and "git_sha" in h["env"] for h in hist)
+    meta = json.load(open(run_dir(cfg) / "meta.json"))
+    assert meta["model_dtype"] == "torch.float32" and meta["config"]["config_id"] == cfg.config_id
