@@ -270,3 +270,14 @@ def test_common_row_set_splits(tmp_path, monkeypatch):
     assert m.loc[("mean_entropy", "all"), "n"] == N
     assert m.loc[("neg_mean_logprob", "all"), "n"] == N - 1
     assert m.loc[("probe", "test"), "n"] == n_test
+
+
+def test_accuracy_reports_n_empty(tmp_path, monkeypatch):
+    c = _cfg(tmp_path, "fp16")
+    _fake_run(tmp_path, monkeypatch, c, 1)
+    append_jsonl(run_dir(c) / "generations.jsonl",
+                 [{"qid": q, "answer": "" if i < 3 else "x", "empty_answer": i < 3}
+                  for i, q in enumerate(QIDS)])
+    evaluate_grid([c], out_dir=tmp_path / "summary")
+    acc = pd.read_csv(tmp_path / "summary/accuracy.csv")
+    assert "n_empty" in acc.columns and acc.n_empty.iloc[0] == 3

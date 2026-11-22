@@ -77,6 +77,14 @@ def _finite(df: pd.DataFrame, det: str) -> tuple[pd.Series, pd.Series]:
     return s, s.notna() & np.isfinite(s)
 
 
+def _n_empty(cfg: RunConfig, labels: dict) -> float:
+    """Labeled rows whose greedy answer was empty (NaN if generations.jsonl is absent)."""
+    path = Path(cfg.results_root) / cfg.config_id / "generations.jsonl"
+    if not path.exists():
+        return math.nan
+    return sum(1 for r in read_jsonl(path) if r["qid"] in labels and r.get("empty_answer"))
+
+
 def _metric_rows(cfg: RunConfig, labels: dict, sc: pd.DataFrame) -> list[dict]:
     """Per-detector rows on each detector's own finite rows ("test", "all"), plus
     "test_common"/"all_common": every detector on the rows where all of them are finite."""
@@ -164,7 +172,10 @@ def _transfer_rows(cfgs: list[RunConfig], data: dict, missing: list) -> list[dic
             ok = finite_act_rows(a, pos)  # same rule as the probe step, at the chosen layer
             x = np.asarray(a[ok][:, pos, :], dtype=np.float32)
             y = np.array([labels[kq[i]] for i in test])[ok]
-            f = _ci_fields(y, probe.predict_proba(x)[:, 1]) if len(x) else                 {"auroc": math.nan, "auroc_lo": math.nan, "auroc_hi": math.nan}
+            if len(x):
+                f = _ci_fields(y, probe.predict_proba(x)[:, 1])
+            else:
+                f = {"auroc": math.nan, "auroc_lo": math.nan, "auroc_hi": math.nan}
             rows.append({"family": fam, "size_b": size, "dataset": ds, "test_precision": tp,
                          "chosen_frac": meta.get("chosen_frac"),
                          "auroc": f["auroc"], "auroc_lo": f["auroc_lo"], "auroc_hi": f["auroc_hi"],
@@ -301,14 +312,16 @@ def evaluate_grid(cfgs: list[RunConfig], out_dir="results/summary") -> None:
         nc = sum(1 for v in labels.values() if v == 0)
         arows.append({"config_id": cfg.config_id, "family": cfg.family, "size_b": cfg.size_b,
                       "precision": cfg.precision, "dataset": cfg.dataset, "n": len(labels),
-                      "accuracy": nc / len(labels) if labels else math.nan, "n_correct": nc})
+                      "accuracy": nc / len(labels) if labels else math.nan, "n_correct": nc,
+                      "n_empty": _n_empty(cfg, labels)})
     mcols = ["config_id", "family", "size_b", "precision", "dataset", "detector", "split", "n",
              "n_pos", "n_neg", "n_dropped_nonfinite", "auroc", "auroc_lo", "auroc_hi", "auprc",
              "auprc_lo", "auprc_hi", "low_confidence"]
     metrics = pd.DataFrame(mrows, columns=mcols)
     metrics.to_csv(out / "metrics.csv", index=False)
     pd.DataFrame(arows, columns=["config_id", "family", "size_b", "precision", "dataset", "n",
-                                 "accuracy", "n_correct"]).to_csv(out / "accuracy.csv", index=False)
+                                 "accuracy", "n_correct", "n_empty"]).to_csv(
+        out / "accuracy.csv", index=False)
     pd.DataFrame(_transfer_rows(cfgs, data, missing),
                  columns=["family", "size_b", "dataset", "test_precision", "chosen_frac", "auroc",
                           "auroc_lo", "auroc_hi", "n_dropped_nonfinite_acts"]).to_csv(
