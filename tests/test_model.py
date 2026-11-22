@@ -84,3 +84,9 @@ def test_quantized_model_runs_in_fp16(precision):
         out = model(**enc, output_hidden_states=True)
     assert out.logits.dtype == torch.float16
     assert out.hidden_states[-1].dtype == torch.float16
+
+
+def test_truncate_answer_ids_extra_stop_ids(fake_tokenizer):
+    assert truncate_answer_ids([3, 4, 9, 7], fake_tokenizer) == [3, 4, 9, 7]
+    assert truncate_answer_ids([3, 4, 9, 7], fake_tokenizer, stop_ids=[9]) == [3, 4]
+    assert truncate_answer_ids([3, 0, 7], fake_tokenizer, stop_ids=[9]) == [3]  # eos still stops

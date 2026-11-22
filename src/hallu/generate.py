@@ -55,6 +55,15 @@ def _prompt(tok, q: Question) -> str:
                                    tokenize=False, date_string=PROMPT_DATE)
 
 
+def _stop_ids(model, tok) -> set[int]:
+    """Every id generate() stops on (generation_config.eos_token_id may be a list, e.g.
+    Llama-3's <|eot_id|>), plus the tokenizer's eos/pad."""
+    eos = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+    ids = set(eos) if isinstance(eos, (list, tuple)) else {eos}
+    ids |= {tok.eos_token_id, tok.pad_token_id}
+    return {int(i) for i in ids if i is not None}
+
+
 def _left_pad(seqs: list[list[int]], pad_id: int, device):
     width = max(len(s) for s in seqs)
     ids = torch.full((len(seqs), width), pad_id, dtype=torch.long)
@@ -82,12 +91,13 @@ def greedy_score(model, tok, batch: list[Question], cfg: RunConfig,
     enc, out = generated
     layers = layer_indices(model.config.num_hidden_layers, cfg.layer_fracs)
     width = enc["input_ids"].shape[1]
+    stop = _stop_ids(model, tok)
 
     seqs, scored, answers = [], [], []
     for i in range(len(batch)):
         prompt_ids = enc["input_ids"][i][enc["attention_mask"][i].bool()].tolist()
         new_ids = out[i, width:].tolist()
-        ans_ids = truncate_answer_ids(new_ids, tok)
+        ans_ids = truncate_answer_ids(new_ids, tok, stop)
         s = ans_ids if ans_ids else new_ids[:1]
         seqs.append(prompt_ids + s)
         scored.append(s)
@@ -152,7 +162,8 @@ def _sample_flagged(model, tok, q: Question, cfg: RunConfig) -> tuple[list[str],
         tok, do_sample=True, temperature=cfg.temperature, top_p=1.0, top_k=0,
         num_return_sequences=cfg.n_samples, max_new_tokens=cfg.max_new_tokens))
     width = enc["input_ids"].shape[1]
-    samples = [tok.decode(truncate_answer_ids(row[width:].tolist(), tok),
+    stop = _stop_ids(model, tok)
+    samples = [tok.decode(truncate_answer_ids(row[width:].tolist(), tok, stop),
                           skip_special_tokens=True).strip() for row in out]
     return samples, flag.nonfinite
 

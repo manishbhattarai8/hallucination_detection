@@ -1,7 +1,7 @@
 """Model loading and per-token statistics."""
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Iterable, Sequence
 
 import torch
 
@@ -55,9 +55,11 @@ def token_stats(logits: torch.Tensor, token_ids: torch.Tensor):
     return lp.tolist(), ent.tolist(), nonfinite
 
 
-def truncate_answer_ids(gen_ids: list[int], tokenizer) -> list[int]:
-    """Cut at first EOS/pad token, or at first token whose text contains a newline."""
+def truncate_answer_ids(gen_ids: list[int], tokenizer,
+                        stop_ids: Iterable[int] | None = None) -> list[int]:
+    """Cut at first EOS/pad/stop_ids token, or at first token whose text contains a newline."""
     stop = {t for t in (tokenizer.eos_token_id, tokenizer.pad_token_id) if t is not None}
+    stop |= set(stop_ids or ())
     out: list[int] = []
     for i in gen_ids:
         if i in stop or "\n" in tokenizer.decode([i]):

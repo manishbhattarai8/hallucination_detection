@@ -275,3 +275,15 @@ def test_generate_deadline_between_batches(tmp_path, monkeypatch):
     monkeypatch.setattr(G, "_now", lambda: next(clock))
     G.generate_run(cfg, deadline=1.0)
     assert len(read_jsonl(run_dir(cfg) / "generations.jsonl")) == 2
+
+
+def test_stop_ids_include_generation_config_eos():
+    import hallu.generate as G
+
+    model = _tiny_llama()
+    model.generation_config.eos_token_id = [_EOS, 7, 9]
+    assert G._stop_ids(model, _StubTok()) == {_EOS, _PAD, 7, 9}
+    model.generation_config.eos_token_id = 11
+    assert G._stop_ids(model, _StubTok()) == {_EOS, _PAD, 11}
+    model.generation_config.eos_token_id = None
+    assert G._stop_ids(model, _StubTok()) == {_EOS, _PAD}
