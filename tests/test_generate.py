@@ -46,6 +46,18 @@ def test_generate_resume_no_duplicates(tmp_path):
     assert "gpu_name" in json.load(open(run_dir(cfg) / "meta.json"))["env"]
 
 
+@pytest.mark.gpu
+def test_generate_nf4_smoke(tmp_path):
+    cfg = replace(load_grid("configs/smoke.yaml")[0], results_root=str(tmp_path),
+                  precision="nf4", config_id="qwen2.5-0.5b_nf4_triviaqa")
+    generate_run(cfg, limit=4)
+    rows = read_jsonl(run_dir(cfg) / "generations.jsonl")
+    assert len(rows) == 4 and all(len(r["samples"]) == 5 for r in rows)
+    assert all(r["token_logprobs"] and None not in r["token_logprobs"] for r in rows)
+    _, acts = load_acts(run_dir(cfg))
+    assert acts.shape[:2] == (4, 4) and np.isfinite(acts.astype(np.float32)).all()
+
+
 # --- offline harness: tiny random Llama + stub tokenizer (no download) ---
 _V, _PAD, _EOS, _NL = 64, 0, 1, 2
 

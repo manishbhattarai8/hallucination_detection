@@ -7,15 +7,21 @@ import torch
 
 
 def load_model(model_id: str, precision: str):
-    """Load (model, tokenizer) at fp16 / int8 / nf4 with device_map='auto'."""
+    """Load (model, tokenizer) at fp16 / int8 / nf4 with device_map='auto'.
+
+    dtype=float16 is passed for every precision: without it transformers uses the
+    checkpoint dtype (bf16) for the non-quantized parts (embeddings, norms, lm_head).
+    """
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
     if precision == "fp16":
         kwargs = {"dtype": torch.float16}
     elif precision == "int8":
-        kwargs = {"quantization_config": BitsAndBytesConfig(load_in_8bit=True)}
+        kwargs = {"dtype": torch.float16,
+                  "quantization_config": BitsAndBytesConfig(load_in_8bit=True)}
     elif precision == "nf4":
         kwargs = {
+            "dtype": torch.float16,
             "quantization_config": BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",

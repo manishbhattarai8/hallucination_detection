@@ -44,3 +44,43 @@ def test_truncate_answer_ids(fake_tokenizer):
     assert truncate_answer_ids([3, 1, 4], fake_tokenizer) == [3]
     assert truncate_answer_ids([5, 3], fake_tokenizer) == []
     assert truncate_answer_ids([3, 4], fake_tokenizer) == [3, 4]
+
+
+@pytest.mark.parametrize("precision", ["fp16", "int8", "nf4"])
+def test_load_model_passes_fp16_dtype(monkeypatch, precision):
+    import transformers
+
+    import hallu.model as M
+
+    seen = {}
+
+    class _Tok:
+        pad_token = "x"
+
+    class _Model:
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained",
+                        lambda *a, **k: _Tok())
+    monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_pretrained",
+                        lambda *a, **k: seen.update(k) or _Model())
+    M.load_model("some/model", precision)
+    assert seen["dtype"] is torch.float16
+    assert seen["device_map"] == "auto"
+    assert ("quantization_config" in seen) == (precision != "fp16")
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("precision", ["int8", "nf4"])
+def test_quantized_model_runs_in_fp16(precision):
+    from hallu.model import load_model
+
+    model, tok = load_model("Qwen/Qwen2.5-0.5B-Instruct", precision)
+    assert model.dtype == torch.float16
+    assert model.lm_head.weight.dtype == torch.float16
+    enc = tok(["Hello there"], return_tensors="pt").to(model.device)
+    with torch.no_grad():
+        out = model(**enc, output_hidden_states=True)
+    assert out.logits.dtype == torch.float16
+    assert out.hidden_states[-1].dtype == torch.float16
