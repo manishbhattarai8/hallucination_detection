@@ -19,11 +19,14 @@ The runner clones the repo to `/kaggle/working/hallucination`, installs `require
 Only `/kaggle/working` is saved. Results are written to `/kaggle/working/hallucination/results`.
 1. Click "Save Version" -> Save & Run All (Commit). When it finishes, open the version's Output tab -> "New Dataset" (name e.g. `hallu-results`). Later versions: "Update dataset" with the new output.
 2. Next session, attach it: Add Input -> Your Datasets -> `hallu-results`.
-3. Set `PREV_RESULTS = "/kaggle/input/hallu-results/results"` (adjust to the actual mount path shown in the input panel). It is copied into `results/` before running; stages skip already-done question IDs.
+3. Set `PREV_RESULTS = "/kaggle/input/hallu-results/hallucination/results"` (a Dataset made from Output holds the whole `/kaggle/working` tree). The runner also tries `<dir>/results` and globs `/kaggle/input/*/hallucination/results`, and raises FileNotFoundError if nothing is found. It prints how many run dirs and generation rows were restored. It is copied into `results/` before running; stages skip already-done question IDs.
 
 Stop and save before the 12 h session cap; resume afterwards.
 
+## Zip (optional)
+`MAKE_ZIP = False` by default, because `results.zip` in `/kaggle/working` is saved again with every version and Dataset (about 20 GB limit). Set `MAKE_ZIP = True` only on the final session if you want one file to download. If you made it mid-project, delete `/kaggle/working/results.zip` before "Save Version".
+
 ## Copy results back into the repo
-Download `results.zip` from the notebook's Output tab and unzip it into the local repo root so it creates `results/`. `results/` is gitignored; results are not committed to the public repo.
+Download the saved output (or `results.zip`) and unzip so the local repo has `results/`. `results/` is gitignored; results are not committed to the public repo.
 
 The fixed question subsets (`data/subsets/*_n1500_seed0.json`) are committed, so Kaggle and the laptop use identical questions.

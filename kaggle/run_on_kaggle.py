@@ -8,7 +8,8 @@ GRID = "configs/qwen.yaml"        # or configs/llama.yaml, configs/smoke.yaml
 CONFIG_IDS = ["qwen2.5-0.5b_fp16_triviaqa", "qwen2.5-3b_nf4_triviaqa"]  # [] = whole grid
 STAGES = ["all"]                  # any of: generate grade detect timing evaluate all
 LIMIT = None                      # e.g. 20 for a quick generate-only check
-PREV_RESULTS = None               # e.g. "/kaggle/input/hallu-results/results" to resume
+PREV_RESULTS = None               # e.g. "/kaggle/input/hallu-results/hallucination/results" to resume
+MAKE_ZIP = False                  # True only on the final session (zip doubles stored size)
 
 # %% [2] GPU check
 import subprocess
@@ -55,9 +56,31 @@ from kaggle_secrets import UserSecretsClient
 login(UserSecretsClient().get_secret("HF_TOKEN"))
 
 # %% [6] Resume from an attached Dataset (optional), then run
+import glob
+
+
+def resolve_prev(given):
+    """Find the results dir inside an attached Dataset; never silently continue."""
+    tried = [f"{given}/hallucination/results", f"{given}/results", given]
+    for c in tried:
+        if os.path.isdir(c):
+            return c
+    globbed = sorted(glob.glob("/kaggle/input/*/hallucination/results"))
+    tried += globbed or ["/kaggle/input/*/hallucination/results (no match)"]
+    for c in globbed:
+        return c
+    raise FileNotFoundError("PREV_RESULTS not found; tried: " + ", ".join(tried))
+
+
 if PREV_RESULTS:
-    shutil.copytree(PREV_RESULTS, "results", dirs_exist_ok=True)
-    print("restored previous results from", PREV_RESULTS)
+    src = resolve_prev(PREV_RESULTS)
+    shutil.copytree(src, "results", dirs_exist_ok=True)
+    n_gen = sum(1 for _ in glob.glob("results/**/generations.jsonl", recursive=True))
+    n_rows = 0
+    for g in glob.glob("results/**/generations.jsonl", recursive=True):
+        with open(g, encoding="utf-8") as f:
+            n_rows += sum(1 for _ in f)
+    print(f"restored from {src}: {n_gen} run dirs with generations, {n_rows} generation rows")
 
 for stage in STAGES:
     cmd = [sys.executable, "scripts/run_stage.py", "--grid", GRID, "--stage", stage]
@@ -68,9 +91,9 @@ for stage in STAGES:
     print("$", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
-# %% [7] Zip results for download
-shutil.make_archive(f"{WORK}/results", "zip", root_dir=REPO_DIR, base_dir="results")
-print("Wrote /kaggle/working/results.zip")
-print("To use locally: download results.zip from the notebook Output tab, then unzip it "
-      "into your local repo root so that it creates <repo>/results/ "
-      "(results/ is gitignored; never commit it).")
+# %% [7] Optional zip (off by default: it would be stored again in every saved version)
+if MAKE_ZIP:
+    shutil.make_archive("/kaggle/working/results", "zip", root_dir=REPO_DIR, base_dir="results")
+    print("Wrote /kaggle/working/results.zip (delete it before 'Save Version' if you continue later)")
+print("To use locally: download the saved output (or results.zip) and unzip so that "
+      "<repo>/results/ exists (results/ is gitignored; never commit it).")
