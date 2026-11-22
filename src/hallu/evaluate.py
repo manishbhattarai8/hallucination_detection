@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -59,10 +60,11 @@ def _ci_fields(y, s) -> dict:
 
 
 def _load(cfg: RunConfig):
-    """(labels dict, scores df joined on qid) or None if the run is incomplete."""
+    """(labels dict, scores df joined on qid), or a reason string if the run is incomplete."""
     rd = Path(cfg.results_root) / cfg.config_id
-    if not (rd / "labels.jsonl").exists() or not (rd / "scores.jsonl").exists():
-        return None
+    for name in ("labels.jsonl", "scores.jsonl"):
+        if not (rd / name).exists():
+            return f"{name} missing"
     labels = {r["qid"]: int(r["label"]) for r in read_jsonl(rd / "labels.jsonl")}
     sc = pd.DataFrame(read_jsonl(rd / "scores.jsonl"))
     sc = sc[sc.qid.isin(labels)].reset_index(drop=True)
@@ -95,9 +97,29 @@ def _metric_rows(cfg: RunConfig, labels: dict, sc: pd.DataFrame) -> list[dict]:
     return rows
 
 
-def _transfer_rows(cfgs: list[RunConfig], data: dict) -> list[dict]:
+def _transfer_rows(cfgs: list[RunConfig], data: dict, missing: list) -> list[dict]:
     by_key = {(c.family, c.size_b, c.dataset, c.precision): c for c in cfgs}
     rows = []
+    for c in cfgs:
+        if c.precision == "fp16":
+            continue
+        base = by_key.get((c.family, c.size_b, c.dataset, "fp16"))
+        why = None
+        if base is None:
+            why = "fp16 run missing"
+        else:
+            bd = Path(base.results_root) / base.config_id
+            try:
+                ok = (bd / "probe.joblib").exists() and                     int(json.loads((bd / "probe.json").read_text(encoding="utf-8"))
+                        .get("chosen_layer_pos", -1)) >= 0
+            except (OSError, ValueError):
+                ok = False
+            if not ok:
+                why = "fp16 probe missing or degenerate"
+        if why is None and c.config_id not in data:
+            why = "run incomplete"
+        if why:
+            missing.append({"config_id": c.config_id, "table": "transfer", "reason": why})
     for (fam, size, ds, prec), base in by_key.items():
         if prec != "fp16":
             continue
@@ -138,16 +160,32 @@ _EXTRA = {"neg_mean_logprob": ["t_conf"], "mean_entropy": ["t_conf"],
           "semantic_entropy": ["t_samples", "t_nli"], "probe": ["t_probe"]}
 
 
-def _cost_rows(cfgs: list[RunConfig], metrics: pd.DataFrame) -> list[dict]:
+def _cost_rows(cfgs: list[RunConfig], metrics: pd.DataFrame, missing: list) -> list[dict]:
     rows = []
     for cfg in cfgs:
         path = Path(cfg.results_root) / "timing" / f"{cfg.config_id}.jsonl"
-        if cfg.timing_excluded or not path.exists():
+
+        def skip(why, cid=cfg.config_id):
+            missing.append({"config_id": cid, "table": "cost", "reason": why})
+        if cfg.timing_excluded:
+            if path.parent.exists():
+                skip("timing_excluded")
+            continue
+        if not path.exists():
+            if path.parent.exists():
+                skip("timing file missing")
             continue
         recs = read_jsonl(path)
         summ = [r for r in recs if r.get("summary")]
         timed = pd.DataFrame([r for r in recs if not r.get("summary")])
-        if not summ or summ[-1].get("gpu_count") != 1 or timed.empty:
+        if not summ:
+            skip("timing summary row missing")
+            continue
+        if summ[-1].get("gpu_count") != 1:
+            skip(f"gpu_count={summ[-1].get('gpu_count')}")
+            continue
+        if timed.empty:
+            skip("no timed rows")
             continue
         for det, cols in _EXTRA.items():
             extra = timed[cols].sum(axis=1)
@@ -214,10 +252,12 @@ def _line_fig(df: pd.DataFrame, ds: str, fam: str, path: Path) -> None:
 def evaluate_grid(cfgs: list[RunConfig], out_dir="results/summary") -> None:
     out = Path(out_dir)
     (out / "figures").mkdir(parents=True, exist_ok=True)
-    data, mrows, arows = {}, [], []
+    data, mrows, arows, missing = {}, [], [], []
     for cfg in cfgs:
         loaded = _load(cfg)
-        if loaded is None:
+        if isinstance(loaded, str):
+            missing.append({"config_id": cfg.config_id, "table": "metrics", "reason": loaded})
+            warnings.warn(f"{cfg.config_id}: skipped in metrics ({loaded})", stacklevel=2)
             continue
         data[cfg.config_id] = loaded
         labels, sc = loaded
@@ -233,12 +273,14 @@ def evaluate_grid(cfgs: list[RunConfig], out_dir="results/summary") -> None:
     metrics.to_csv(out / "metrics.csv", index=False)
     pd.DataFrame(arows, columns=["config_id", "family", "size_b", "precision", "dataset", "n",
                                  "accuracy", "n_correct"]).to_csv(out / "accuracy.csv", index=False)
-    pd.DataFrame(_transfer_rows(cfgs, data),
+    pd.DataFrame(_transfer_rows(cfgs, data, missing),
                  columns=["family", "size_b", "dataset", "test_precision", "chosen_frac", "auroc",
                           "auroc_lo", "auroc_hi"]).to_csv(out / "transfer.csv", index=False)
-    cost = _cost_rows(cfgs, metrics)
+    cost = _cost_rows(cfgs, metrics, missing)
     if cost:
         pd.DataFrame(cost).to_csv(out / "cost.csv", index=False)
+    pd.DataFrame(missing, columns=["config_id", "table", "reason"]).to_csv(
+        out / "missing.csv", index=False)
     for ds, fam in sorted({(c.dataset, c.family) for c in cfgs if c.config_id in data}):
         for det in DETECTORS:
             _heatmap(metrics, det, ds, fam, out / "figures" / f"heatmap_{det}_{ds}_{fam}.pdf")

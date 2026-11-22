@@ -148,3 +148,38 @@ def test_cost_excludes_timing_excluded(tmp_path, monkeypatch):
                   {"summary": True, "gpu_name": "T4", "gpu_count": 1}])
     evaluate_grid([c], out_dir=tmp_path / "summary")
     assert not (tmp_path / "summary/cost.csv").exists()
+
+
+def test_missing_runs_are_recorded_and_warned(tmp_path, monkeypatch):
+    good, gone = _cfg(tmp_path, "fp16"), _cfg(tmp_path, "nf4")
+    _fake_run(tmp_path, monkeypatch, good, 1)
+    with pytest.warns(UserWarning, match=gone.config_id):
+        evaluate_grid([good, gone], out_dir=tmp_path / "summary")
+    miss = pd.read_csv(tmp_path / "summary/missing.csv")
+    assert list(miss.columns) == ["config_id", "table", "reason"]
+    r = miss[(miss.config_id == gone.config_id) & (miss.table == "metrics")]
+    assert len(r) == 1 and r.reason.iloc[0]
+    assert set(pd.read_csv(tmp_path / "summary/metrics.csv").config_id) == {good.config_id}
+
+
+def test_missing_csv_cost_reasons_and_header_only(tmp_path, monkeypatch):
+    a = _cfg(tmp_path, "fp16", excluded=True)
+    b = _cfg(tmp_path, "int8")
+    _fake_run(tmp_path, monkeypatch, a, 1)
+    _fake_run(tmp_path, monkeypatch, b, 2)
+    t = [{"qid": "q0", "t_greedy": 1, "t_conf": 0, "t_samples": 0, "t_nli": 0,
+          "t_probe": 0, "peak_vram_gb": 1}]
+    append_jsonl(tmp_path / "timing" / f"{a.config_id}.jsonl",
+                 t + [{"summary": True, "gpu_name": "T4", "gpu_count": 1}])
+    append_jsonl(tmp_path / "timing" / f"{b.config_id}.jsonl",
+                 t + [{"summary": True, "gpu_name": "T4", "gpu_count": 2}])
+    evaluate_grid([a, b], out_dir=tmp_path / "summary")
+    m = pd.read_csv(tmp_path / "summary/missing.csv")
+    cost = m[m.table == "cost"].set_index("config_id").reason
+    assert cost[a.config_id] == "timing_excluded" and cost[b.config_id] == "gpu_count=2"
+
+
+def test_missing_csv_header_only_when_complete(tmp_path, two_runs):
+    evaluate_grid(two_runs, out_dir=tmp_path / "summary")
+    m = pd.read_csv(tmp_path / "summary/missing.csv")
+    assert len(m) == 0 and list(m.columns) == ["config_id", "table", "reason"]
