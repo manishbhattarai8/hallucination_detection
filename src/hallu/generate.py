@@ -45,9 +45,14 @@ def _gen_kwargs(tok, **overrides) -> dict:
     return kw
 
 
+# Frozen: Llama-3.x templates otherwise insert today's date into the system prompt,
+# making prompts depend on the run day. Templates that ignore date_string are unaffected.
+PROMPT_DATE = "26 Jul 2024"
+
+
 def _prompt(tok, q: Question) -> str:
     return tok.apply_chat_template(build_messages(q.question), add_generation_prompt=True,
-                                   tokenize=False)
+                                   tokenize=False, date_string=PROMPT_DATE)
 
 
 def _left_pad(seqs: list[list[int]], pad_id: int, device):

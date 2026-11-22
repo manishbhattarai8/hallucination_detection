@@ -66,7 +66,7 @@ class _StubTok:
     eos_token_id = _EOS
     pad_token_id = _PAD
 
-    def apply_chat_template(self, msgs, add_generation_prompt, tokenize):
+    def apply_chat_template(self, msgs, add_generation_prompt, tokenize, **kw):
         return msgs[-1]["content"]
 
     def __call__(self, texts, return_tensors, padding=False, add_special_tokens=False):
@@ -192,3 +192,51 @@ def test_three_consecutive_sampling_fallbacks_abort(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="consecutive"):
         G.generate_run(cfg)
     assert len(read_jsonl(run_dir(cfg) / "generations.jsonl")) == 2
+
+
+_LLAMA_LIKE = ('{%- if not date_string is defined %}{%- set date_string = strftime_now("%d %b %Y")'
+               ' %}{%- endif %}Today Date: {{ date_string }}\n'
+               '{% for m in messages %}{{ m["content"] }}\n{% endfor %}')
+
+
+def _cached_qwen_tok():
+    from transformers import AutoTokenizer
+
+    try:
+        return AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct", local_files_only=True)
+    except OSError:
+        pytest.skip("Qwen tokenizer not cached")
+
+
+def test_prompt_date_is_pinned(monkeypatch):
+    import datetime as dt
+
+    import transformers.utils.chat_template_utils as ctu
+
+    import hallu.generate as G
+    from hallu.data import Question
+
+    tok = _cached_qwen_tok()
+    tok.chat_template = _LLAMA_LIKE
+    q = Question("a", "Who?", ("x",))
+    p1 = G._prompt(tok, q)
+    assert G.PROMPT_DATE == "26 Jul 2024" and "Today Date: 26 Jul 2024" in p1
+
+    class _Later(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime(2031, 3, 9)
+
+    monkeypatch.setattr(ctu, "datetime", _Later)
+    assert G._prompt(tok, q) == p1
+
+
+def test_qwen_prompt_unchanged_by_date_string():
+    import hallu.generate as G
+    from hallu.data import Question, build_messages
+
+    tok = _cached_qwen_tok()
+    q = Question("a", "Who wrote Hamlet?", ("x",))
+    before = tok.apply_chat_template(build_messages(q.question), add_generation_prompt=True,
+                                     tokenize=False)
+    assert G._prompt(tok, q) == before
