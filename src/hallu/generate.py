@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from transformers import LogitsProcessor, LogitsProcessorList
 
 from .config import RunConfig, run_dir
 from .data import Question, build_messages, load_questions
@@ -104,16 +105,40 @@ def greedy_pass(model, tok, questions: list[Question], cfg: RunConfig) -> list[G
     return results
 
 
+class _FlagAndSanitize(LogitsProcessor):
+    """Records whether raw logits were non-finite and replaces NaN/inf so sampling can't crash.
+
+    Custom processors run before the temperature warper, so this sees the model's raw logits.
+    """
+
+    def __init__(self):
+        self.nonfinite = False
+
+    def __call__(self, input_ids, scores):
+        if not bool(torch.isfinite(scores).all()):
+            self.nonfinite = True
+            fi = torch.finfo(scores.dtype)
+            scores = torch.nan_to_num(scores, nan=0.0, posinf=fi.max, neginf=fi.min)
+        return scores
+
+
 @torch.no_grad()
-def sample_pass(model, tok, q: Question, cfg: RunConfig) -> list[str]:
+def _sample_flagged(model, tok, q: Question, cfg: RunConfig) -> tuple[list[str], bool]:
+    """Sampled answers plus whether any sampling step produced non-finite logits."""
     torch.manual_seed(sample_seed_for(q.qid, cfg.sample_seed))
     enc = tok([_prompt(tok, q)], return_tensors="pt", add_special_tokens=False).to(model.device)
-    out = model.generate(**enc, **_gen_kwargs(
+    flag = _FlagAndSanitize()
+    out = model.generate(**enc, logits_processor=LogitsProcessorList([flag]), **_gen_kwargs(
         tok, do_sample=True, temperature=cfg.temperature, top_p=1.0, top_k=0,
         num_return_sequences=cfg.n_samples, max_new_tokens=cfg.max_new_tokens))
     width = enc["input_ids"].shape[1]
-    return [tok.decode(truncate_answer_ids(row[width:].tolist(), tok),
-                       skip_special_tokens=True).strip() for row in out]
+    samples = [tok.decode(truncate_answer_ids(row[width:].tolist(), tok),
+                          skip_special_tokens=True).strip() for row in out]
+    return samples, flag.nonfinite
+
+
+def sample_pass(model, tok, q: Question, cfg: RunConfig) -> list[str]:
+    return _sample_flagged(model, tok, q, cfg)[0]
 
 
 def _next_shard(acts_dir: Path) -> Path:
@@ -159,12 +184,15 @@ def generate_run(cfg: RunConfig, limit: int | None = None) -> Path:
         rows = []
         for q, g in zip(batch, greedy):
             t0 = time.perf_counter()
-            samples = sample_pass(model, tok, q, cfg)
+            try:
+                samples, sample_bad = _sample_flagged(model, tok, q, cfg)
+            except RuntimeError:  # last resort: never let one question block the run
+                samples, sample_bad = [""] * cfg.n_samples, True
             rows.append({
                 "qid": g.qid,
                 "answer": g.answer,
                 "empty_answer": g.empty_answer,
-                "nonfinite": g.nonfinite,
+                "nonfinite": g.nonfinite or sample_bad,
                 "token_logprobs": _finite_or_none(g.token_logprobs),
                 "token_entropies": _finite_or_none(g.token_entropies),
                 "samples": samples,

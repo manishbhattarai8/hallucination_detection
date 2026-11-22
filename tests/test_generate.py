@@ -44,3 +44,77 @@ def test_generate_resume_no_duplicates(tmp_path):
     qids, acts = load_acts(run_dir(cfg))
     assert acts.shape[:2] == (6, 4) and acts.dtype == np.float16
     assert "gpu_name" in json.load(open(run_dir(cfg) / "meta.json"))["env"]
+
+
+# --- offline harness: tiny random Llama + stub tokenizer (no download) ---
+_V, _PAD, _EOS, _NL = 64, 0, 1, 2
+
+
+class _StubTok:
+    eos_token_id = _EOS
+    pad_token_id = _PAD
+
+    def apply_chat_template(self, msgs, add_generation_prompt, tokenize):
+        return msgs[-1]["content"]
+
+    def __call__(self, texts, return_tensors, padding=False, add_special_tokens=False):
+        from transformers import BatchEncoding
+
+        from hallu.generate import _left_pad
+        ids, mask = _left_pad([[3 + ord(c) % (_V - 3) for c in t] for t in texts], _PAD, "cpu")
+        return BatchEncoding({"input_ids": ids, "attention_mask": mask})
+
+    def decode(self, ids, skip_special_tokens=False):
+        return "".join("\n" if i == _NL else "" if i in (_EOS, _PAD) else chr(65 + i % 26)
+                       for i in ids)
+
+
+def _tiny_llama():
+    import torch
+    from transformers import LlamaConfig, LlamaForCausalLM
+
+    torch.manual_seed(0)
+    return LlamaForCausalLM(LlamaConfig(
+        vocab_size=_V, hidden_size=32, intermediate_size=64, num_hidden_layers=4,
+        num_attention_heads=4, num_key_value_heads=2, eos_token_id=_EOS,
+        pad_token_id=_PAD)).eval()
+
+
+def test_generate_run_survives_nan_logits(tmp_path, monkeypatch):
+    import hallu.generate as G
+    from hallu.data import Question
+
+    model = _tiny_llama()
+
+    def nan_hook(mod, inp, out):
+        out = out.clone()
+        out[..., 5] = float("nan")
+        return out
+
+    model.lm_head.register_forward_hook(nan_hook)
+    qs = [Question("a", "hi", ("x",)), Question("b", "a longer question", ("y",))]
+    monkeypatch.setattr(G, "load_model", lambda *a: (model, _StubTok()))
+    monkeypatch.setattr(G, "load_questions", lambda cfg: qs)
+    cfg = replace(load_grid("configs/smoke.yaml")[0], results_root=str(tmp_path),
+                  max_new_tokens=6, batch_size=2)
+    G.generate_run(cfg)
+    rows = read_jsonl(run_dir(cfg) / "generations.jsonl")
+    assert [r["qid"] for r in rows] == ["a", "b"]
+    assert all(r["nonfinite"] and len(r["samples"]) == 5 for r in rows)
+    assert G.load_acts(run_dir(cfg))[1].shape == (2, 4, 32)
+
+
+def test_sample_pass_flags_nonfinite_sampling_logits(monkeypatch):
+    import torch
+
+    import hallu.generate as G
+    from hallu.data import Question
+
+    model = _tiny_llama()
+    cfg = replace(load_grid("configs/smoke.yaml")[0], max_new_tokens=4)
+    q = Question("a", "hi", ("x",))
+    samples, bad = G._sample_flagged(model, _StubTok(), q, cfg)
+    assert len(samples) == 5 and not bad
+    model.lm_head.register_forward_hook(lambda m, i, o: torch.full_like(o, float("inf")))
+    samples, bad = G._sample_flagged(model, _StubTok(), q, cfg)
+    assert len(samples) == 5 and bad
