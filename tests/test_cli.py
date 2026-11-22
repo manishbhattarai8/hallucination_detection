@@ -27,6 +27,27 @@ def test_all_runs_stages_in_order(monkeypatch, capsys):
     assert main(["--grid", GRID, "--stage", "all", "--limit", "3"]) == 0
     names = [c[0] for c in calls]
     assert names == ["generate_run", "grade_run", "detect_run", "evaluate"]
-    assert calls[0][1] == {"limit": 3}
-    assert calls[2][1] == {"nli": "judge"}
+    assert calls[0][1] == {"limit": 3, "deadline": None}
+    assert calls[2][1] == {"nli": "judge", "deadline": None}
     assert calls[3][1].replace("\\", "/").endswith("results_smoke/summary")
+
+
+def test_deadline_stops_cleanly(monkeypatch, capsys):
+    calls = []
+    for name in ("generate_run", "grade_run", "detect_run", "timing_run"):
+        monkeypatch.setattr(run_stage, name, lambda cfg, *a, _n=name, **k: calls.append((_n, k)))
+    monkeypatch.setattr(run_stage, "NLIJudge", lambda: "judge")
+    monkeypatch.setattr(run_stage, "evaluate_grid", lambda cfgs, out_dir: calls.append(("evaluate",)))
+    assert main(["--grid", GRID, "--stage", "all", "--deadline-hours", "0"]) == 0
+    assert calls == []
+    assert "deadline reached, stopping cleanly; rerun to resume" in capsys.readouterr().out
+
+
+def test_deadline_passed_to_stages(monkeypatch):
+    calls = []
+    for name in ("generate_run", "grade_run", "detect_run"):
+        monkeypatch.setattr(run_stage, name, lambda cfg, *a, _n=name, **k: calls.append((_n, k)))
+    monkeypatch.setattr(run_stage, "NLIJudge", lambda: "judge")
+    monkeypatch.setattr(run_stage, "evaluate_grid", lambda cfgs, out_dir: None)
+    assert main(["--grid", GRID, "--stage", "all", "--deadline-hours", "2"]) == 0
+    assert isinstance(calls[0][1]["deadline"], float) and calls[2][1]["deadline"] == calls[0][1]["deadline"]

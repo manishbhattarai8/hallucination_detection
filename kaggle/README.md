@@ -23,7 +23,7 @@ Only `/kaggle/working` is saved. Results are written to `/kaggle/working/halluci
 2. Next session, attach it: Add Input -> Your Datasets -> `hallu-results`.
 3. Set `PREV_RESULTS = "/kaggle/input/hallu-results/hallucination/results"` (a Dataset made from Output holds the whole `/kaggle/working` tree). The runner also tries `<dir>/results` and globs `/kaggle/input/*/hallucination/results`, and raises FileNotFoundError if nothing is found. It prints how many run dirs and generation rows were restored. It is copied into `results/` before running; stages skip already-done question IDs.
 
-Stop and save before the 12 h session cap; resume afterwards.
+Stop and save before the 12 h session cap; resume afterwards. `TIME_BUDGET_H = 11` (first cell) does this for you: it is counted from when the settings cell runs and passed to `scripts/run_stage.py --deadline-hours` as the time left. When it is reached, generate stops between batches and detect between questions (all written rows stay valid; the probe step waits for a complete detect), the script prints `deadline reached, stopping cleanly; rerun to resume` and exits 0, so the notebook finishes and the output can be saved. Resume next session with `PREV_RESULTS`.
 
 ## Zip (optional)
 `MAKE_ZIP = False` by default, because `results.zip` in `/kaggle/working` is saved again with every version and Dataset (about 20 GB limit). Set `MAKE_ZIP = True` only on the final session if you want one file to download. If you made it mid-project, delete `/kaggle/working/results.zip` before "Save Version".

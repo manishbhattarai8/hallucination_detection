@@ -197,7 +197,17 @@ def load_acts(run_dir: Path) -> tuple[list[str], np.ndarray]:
     return list(by_qid), np.stack(list(by_qid.values()))
 
 
-def generate_run(cfg: RunConfig, limit: int | None = None) -> Path:
+_now = time.monotonic  # module-level so tests can drive the deadline clock
+
+
+def past_deadline(deadline: float | None) -> bool:
+    """deadline is a time.monotonic() timestamp, or None for no limit."""
+    return deadline is not None and _now() >= deadline
+
+
+def generate_run(cfg: RunConfig, limit: int | None = None,
+                 deadline: float | None = None) -> Path:
+    """Generate missing rows. Stops cleanly between batches once `deadline` (monotonic) passes."""
     rd = run_dir(cfg)
     gen_path = rd / "generations.jsonl"
     questions = load_questions(cfg)
@@ -209,12 +219,21 @@ def generate_run(cfg: RunConfig, limit: int | None = None) -> Path:
         record_meta(rd, "generate", asdict(cfg))
         return rd
 
+    if past_deadline(deadline):
+        print(f"[{cfg.config_id}] deadline reached before generation; nothing written",
+              flush=True)
+        return rd
+
     model, tok = load_model(cfg.model, cfg.precision)
     record_meta(rd, "generate", asdict(cfg), model_dtype=str(model.dtype))
     acts_dir = rd / "acts"
     acts_dir.mkdir(exist_ok=True)
     consecutive_fail = 0
     for start in range(0, len(todo), cfg.batch_size):
+        if past_deadline(deadline):
+            print(f"[{cfg.config_id}] deadline reached after {start}/{len(todo)} new rows",
+                  flush=True)
+            return rd
         batch = todo[start:start + cfg.batch_size]
         t0 = time.perf_counter()
         greedy = greedy_pass(model, tok, batch, cfg)

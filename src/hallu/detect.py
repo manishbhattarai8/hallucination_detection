@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -102,7 +103,13 @@ def _probe_step(cfg: RunConfig, rd: Path, scores_path: Path) -> None:
     probe_json.write_text(_dump(meta), encoding="utf-8")
 
 
-def detect_run(cfg: RunConfig, nli: NLIJudge | None = None) -> Path:
+_now = time.monotonic  # module-level so tests can drive the deadline clock
+
+
+def detect_run(cfg: RunConfig, nli: NLIJudge | None = None,
+               deadline: float | None = None) -> Path:
+    """Score missing rows, then the probe step. Once `deadline` (monotonic) passes it stops
+    cleanly between rows and skips the probe step (which needs every row scored)."""
     rd = run_dir(cfg)
     record_meta(rd, "detect", asdict(cfg))
     scores_path = rd / "scores.jsonl"
@@ -110,9 +117,21 @@ def detect_run(cfg: RunConfig, nli: NLIJudge | None = None) -> Path:
     gens = read_jsonl(rd / "generations.jsonl")
     done = done_ids(scores_path)
     todo = [g for g in gens if g["qid"] not in done]
+
+    def out_of_time() -> bool:
+        if deadline is not None and _now() >= deadline:
+            print(f"[{cfg.config_id}] deadline reached during detect; probe step skipped",
+                  flush=True)
+            return True
+        return False
+
+    if out_of_time():
+        return rd
     if todo and nli is None:
         nli = NLIJudge()
     for g in todo:
+        if out_of_time():
+            return rd
         nf = bool(g.get("nonfinite"))
         if g.get("sample_failed"):  # samples are placeholders: no semantic entropy
             ent, ncl = None, None
@@ -129,5 +148,7 @@ def detect_run(cfg: RunConfig, nli: NLIJudge | None = None) -> Path:
         }])
     if not scores_path.exists():
         scores_path.write_text("", encoding="utf-8")
+    if out_of_time():
+        return rd
     _probe_step(cfg, rd, scores_path)
     return rd

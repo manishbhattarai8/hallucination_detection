@@ -251,3 +251,27 @@ def test_generate_appends_meta_history(tmp_path, monkeypatch):
     assert all(h["model_dtype"] == "torch.float32" and "git_sha" in h["env"] for h in hist)
     meta = json.load(open(run_dir(cfg) / "meta.json"))
     assert meta["model_dtype"] == "torch.float32" and meta["config"]["config_id"] == cfg.config_id
+
+
+def test_generate_stops_at_deadline(tmp_path, monkeypatch, capsys):
+    import time
+
+    G, cfg = _harness(tmp_path, monkeypatch, n_q=4, batch_size=2)
+    G.generate_run(cfg, limit=2)
+    before = (run_dir(cfg) / "generations.jsonl").read_text()
+    shards = sorted((run_dir(cfg) / "acts").glob("*.npz"))
+    monkeypatch.setattr(G, "load_model", lambda *a: (_ for _ in ()).throw(AssertionError("load")))
+    assert G.generate_run(cfg, deadline=time.monotonic() - 1) == run_dir(cfg)
+    assert (run_dir(cfg) / "generations.jsonl").read_text() == before
+    assert sorted((run_dir(cfg) / "acts").glob("*.npz")) == shards
+    assert "deadline" in capsys.readouterr().out
+
+
+def test_generate_deadline_between_batches(tmp_path, monkeypatch):
+    import time
+
+    G, cfg = _harness(tmp_path, monkeypatch, n_q=6, batch_size=2)
+    clock = iter([0.0, 0.0, 5.0, 5.0, 5.0])  # pre-load check, batch 1 ok, batch 2 past deadline
+    monkeypatch.setattr(G, "_now", lambda: next(clock))
+    G.generate_run(cfg, deadline=1.0)
+    assert len(read_jsonl(run_dir(cfg) / "generations.jsonl")) == 2

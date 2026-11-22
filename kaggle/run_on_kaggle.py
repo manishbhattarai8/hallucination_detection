@@ -11,6 +11,11 @@ LIMIT = None                      # smoke tests only (GRID = "configs/smoke.yaml
                                   # keep None for real runs: probe and evaluate need complete runs
 PREV_RESULTS = None               # e.g. "/kaggle/input/hallu-results/hallucination/results" to resume
 MAKE_ZIP = False                  # True only on the final session (zip doubles stored size)
+TIME_BUDGET_H = 11                # stop cleanly before Kaggle's 12 h cap (counted from this cell)
+
+import time
+
+SESSION_START = time.monotonic()
 
 # %% [2] GPU check
 import subprocess
@@ -84,7 +89,12 @@ if PREV_RESULTS:
     print(f"restored from {src}: {n_gen} run dirs with generations, {n_rows} generation rows")
 
 for stage in STAGES:
-    cmd = [sys.executable, "scripts/run_stage.py", "--grid", GRID, "--stage", stage]
+    left_h = TIME_BUDGET_H - (time.monotonic() - SESSION_START) / 3600
+    if left_h <= 0:
+        print("time budget used up; save this version and rerun to resume")
+        break
+    cmd = [sys.executable, "scripts/run_stage.py", "--grid", GRID, "--stage", stage,
+           "--deadline-hours", f"{left_h:.4f}"]
     if CONFIG_IDS:
         cmd += ["--config-id", *CONFIG_IDS]
     if LIMIT:

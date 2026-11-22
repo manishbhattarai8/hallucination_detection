@@ -171,3 +171,24 @@ def test_detect_records_history_and_probe_git_sha(tmp_path, monkeypatch):
     hist = read_jsonl(rd / "meta_history.jsonl")
     assert [h["stage"] for h in hist] == ["detect"]
     assert "git_sha" in json.loads((rd / "probe.json").read_text())
+
+
+def test_detect_stops_at_deadline(tmp_path, monkeypatch):
+    import time
+
+    cfg, rd, qids = _build(tmp_path, monkeypatch)
+    judge = StubJudge()
+    assert D.detect_run(cfg, nli=judge, deadline=time.monotonic() - 1) == rd
+    assert judge.calls == [] and not (rd / "probe.json").exists()
+    assert not (rd / "scores.jsonl").exists() or read_jsonl(rd / "scores.jsonl") == []
+
+
+def test_detect_deadline_mid_rows_skips_probe(tmp_path, monkeypatch):
+    cfg, rd, qids = _build(tmp_path, monkeypatch)
+    clock = iter([0.0] * 11 + [9.0] * 100)  # pre-loop check + 10 rows
+    monkeypatch.setattr(D, "_now", lambda: next(clock))
+    D.detect_run(cfg, nli=StubJudge(), deadline=1.0)
+    assert len(read_jsonl(rd / "scores.jsonl")) == 10 and not (rd / "probe.json").exists()
+    monkeypatch.setattr(D, "_now", lambda: 0.0)
+    D.detect_run(cfg, nli=StubJudge(), deadline=1.0)
+    assert len(read_jsonl(rd / "scores.jsonl")) == 50 and (rd / "probe.json").exists()
