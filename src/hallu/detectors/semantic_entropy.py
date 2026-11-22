@@ -46,9 +46,11 @@ class NLIJudge:
         dtype = torch.float16 if device == "cuda" else torch.float32
         self.device = device
         self.tok = AutoTokenizer.from_pretrained(model_name)
+        # Load without a dtype kwarg, then cast explicitly: from_pretrained(dtype=fp16)
+        # leaves some DeBERTa params (q_bias/v_bias) in fp32, which breaks matmul.
         self.model = (
-            AutoModelForSequenceClassification.from_pretrained(model_name, torch_dtype=dtype)
-            .to(device)
+            AutoModelForSequenceClassification.from_pretrained(model_name)
+            .to(device=device, dtype=dtype)
             .eval()
         )
         id2label = self.model.config.id2label

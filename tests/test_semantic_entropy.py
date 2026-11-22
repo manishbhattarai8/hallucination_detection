@@ -36,3 +36,27 @@ def test_empty_answers_cluster_together():
 def test_nli_judge_smoke():
     j = NLIJudge()
     assert j.semantic_entropy("Capital of France?", ["Paris", "Paris", "Rome"])[1] == 2
+
+
+@pytest.mark.gpu
+def test_nli_judge_fp16_tiny_model(tmp_path):
+    import torch
+    from transformers import AutoTokenizer, DebertaConfig, DebertaForSequenceClassification
+
+    if not torch.cuda.is_available():
+        pytest.skip("needs CUDA")
+    tok = AutoTokenizer.from_pretrained("microsoft/deberta-large-mnli")
+    cfg = DebertaConfig(
+        vocab_size=len(tok), hidden_size=32, num_hidden_layers=2, num_attention_heads=2,
+        intermediate_size=64, relative_attention=True, pos_att_type=["c2p", "p2c"],
+        max_position_embeddings=512, max_relative_positions=-1, position_biased_input=False,
+        num_labels=3, id2label={0: "CONTRADICTION", 1: "NEUTRAL", 2: "ENTAILMENT"},
+        label2id={"CONTRADICTION": 0, "NEUTRAL": 1, "ENTAILMENT": 2},
+    )
+    DebertaForSequenceClassification(cfg).save_pretrained(tmp_path)
+    tok.save_pretrained(tmp_path)
+    j = NLIJudge(model_name=str(tmp_path), device="cuda")
+    assert all(p.dtype == torch.float16 for p in j.model.parameters())
+    assert isinstance(j.entails("Q?", "a", "b"), bool)
+    h, n = j.semantic_entropy("Q?", ["x", "y", "z"])
+    assert 1 <= n <= 3
