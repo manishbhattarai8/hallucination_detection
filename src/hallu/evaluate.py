@@ -270,6 +270,10 @@ def evaluate_grid(cfgs: list[RunConfig], out_dir="results/summary") -> None:
             continue
         data[cfg.config_id] = loaded
         labels, sc = loaded
+        if len(sc) < cfg.n_questions:
+            why = f"run incomplete ({len(sc)}/{cfg.n_questions})"
+            missing.append({"config_id": cfg.config_id, "table": "metrics", "reason": why})
+            warnings.warn(f"{cfg.config_id}: evaluated on a partial run, {why}", stacklevel=2)
         mrows += _metric_rows(cfg, labels, sc)
         nc = sum(1 for v in labels.values() if v == 0)
         arows.append({"config_id": cfg.config_id, "family": cfg.family, "size_b": cfg.size_b,

@@ -7,7 +7,8 @@ BRANCH = "feat/pipeline"          # switch to "main" once merged
 GRID = "configs/qwen.yaml"        # or configs/llama.yaml, configs/smoke.yaml
 CONFIG_IDS = ["qwen2.5-0.5b_fp16_triviaqa", "qwen2.5-3b_nf4_triviaqa"]  # [] = whole grid
 STAGES = ["all"]                  # any of: generate grade detect timing evaluate all
-LIMIT = None                      # e.g. 20 for a quick generate-only check
+LIMIT = None                      # smoke tests only (GRID = "configs/smoke.yaml", scratch results root);
+                                  # keep None for real runs: probe and evaluate need complete runs
 PREV_RESULTS = None               # e.g. "/kaggle/input/hallu-results/hallucination/results" to resume
 MAKE_ZIP = False                  # True only on the final session (zip doubles stored size)
 

@@ -10,6 +10,8 @@ All reported experiments run on Kaggle. Budget: about 30 GPU-hours per week, 12 
 5. Load the runner: File -> Import Notebook and pick `kaggle/run_on_kaggle.py`, or paste each `# %%` cell into its own cell.
 6. Edit the first cell: `GRID`, `CONFIG_IDS` (empty list = whole grid), `STAGES`. Run all cells.
 
+`LIMIT` is for smoke testing only, into a scratch results root (e.g. `GRID = "configs/smoke.yaml"`, which writes to `results_smoke/`). Keep `LIMIT = None` for real runs: the probe is trained only once every subset question is generated and labeled (otherwise detect prints `probe skipped: n/N labeled`), and evaluate flags partial runs in `missing.csv` as `run incomplete (n/N)`.
+
 The runner clones the repo to `/kaggle/working/hallucination`, installs `requirements.txt` without the `numpy==` and `torch` lines (Kaggle's torch build needs its own numpy; this is done automatically), asserts a T4, logs in to Hugging Face, runs `scripts/run_stage.py`, and zips results. If you run it manually and a pinned numpy conflicts: `pip install -r <(grep -v numpy requirements.txt)`.
 
 ## First run: the pilot

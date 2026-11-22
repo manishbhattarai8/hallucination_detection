@@ -130,3 +130,18 @@ def test_sample_failed_rows_have_null_semantic_entropy(tmp_path, monkeypatch):
     assert sc["q003"]["semantic_entropy"] is None and sc["q003"]["n_clusters"] is None
     assert sc["q003"]["neg_mean_logprob"] == 1.0
     assert sc["q004"]["semantic_entropy"] == 0.0 and len(judge.calls) == 49
+
+
+def test_probe_skipped_on_partial_run_then_trained_when_complete(tmp_path, monkeypatch, capsys):
+    cfg, rd, qids = _build(tmp_path, monkeypatch)
+    full = (rd / "labels.jsonl").read_text().splitlines(keepends=True)
+    (rd / "labels.jsonl").write_text("".join(full[:30]))
+    D.detect_run(cfg, nli=StubJudge())
+    assert "probe skipped: 30/50 labeled" in capsys.readouterr().out
+    assert not (rd / "probe.json").exists() and not (rd / "probe.joblib").exists()
+    assert all(r["probe"] is None for r in read_jsonl(rd / "scores.jsonl"))
+    (rd / "labels.jsonl").write_text("".join(full))
+    D.detect_run(cfg, nli=StubJudge())
+    pj = json.loads((rd / "probe.json").read_text())
+    assert pj["chosen_layer_pos"] == 2 and pj["n_train_qids"] == 50 and pj["n_total"] == 50
+    assert any(r["probe"] is not None for r in read_jsonl(rd / "scores.jsonl"))

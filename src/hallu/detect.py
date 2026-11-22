@@ -50,7 +50,12 @@ def _probe_step(cfg: RunConfig, rd: Path, scores_path: Path) -> None:
         return
     labels = {r["qid"]: int(r["label"]) for r in read_jsonl(rd / "labels.jsonl")}
     a_qids, acts = load_acts(rd)
-    keep = [i for i, q in enumerate(a_qids) if q in labels]
+    full = {q.qid for q in load_questions(cfg)}
+    keep = [i for i, q in enumerate(a_qids) if q in labels and q in full]
+    # The probe is trained once and frozen (probe.json marks it done), so never on a partial run.
+    if len(keep) < len(full):
+        print(f"[{cfg.config_id}] probe skipped: {len(keep)}/{len(full)} labeled", flush=True)
+        return
     kq = [a_qids[i] for i in keep]
     y = np.array([labels[q] for q in kq], dtype=int)
     x = acts[keep] if keep else acts[:0]
@@ -78,6 +83,8 @@ def _probe_step(cfg: RunConfig, rd: Path, scores_path: Path) -> None:
         "layer_val_auroc": {str(k): _clean(v) for k, v in res.layer_val_auroc.items()},
         "chosen_frac": _clean(res.chosen_frac),
         "chosen_layer_pos": int(res.chosen_layer_pos),
+        "n_train_qids": len(kq),
+        "n_total": len(full),
     }
     probe_json.write_text(_dump(meta), encoding="utf-8")
 

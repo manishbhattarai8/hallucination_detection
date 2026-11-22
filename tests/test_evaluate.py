@@ -212,3 +212,17 @@ def test_line_figure_single_size(tmp_path, monkeypatch):
         warnings.simplefilter("error")
         evaluate_grid([c], out_dir=tmp_path / "summary")
     assert len(_figs(tmp_path)[1]) == 1
+
+
+def test_partial_run_evaluated_but_flagged(tmp_path, monkeypatch):
+    c = _cfg(tmp_path, "fp16")
+    _fake_run(tmp_path, monkeypatch, c, 1)
+    lab = run_dir(c) / "labels.jsonl"
+    lab.write_text("".join(lab.read_text().splitlines(keepends=True)[:40]))
+    with pytest.warns(UserWarning, match=r"run incomplete \(40/60\)"):
+        evaluate_grid([c], out_dir=tmp_path / "summary")
+    miss = pd.read_csv(tmp_path / "summary/missing.csv")
+    r = miss[(miss.config_id == c.config_id) & (miss.table == "metrics")]
+    assert list(r.reason) == ["run incomplete (40/60)"]
+    m = pd.read_csv(tmp_path / "summary/metrics.csv")
+    assert (m[(m.split == "all") & (m.detector == "mean_entropy")].n == 40).all()
