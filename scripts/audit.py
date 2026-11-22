@@ -17,12 +17,13 @@ def main(argv=None) -> None:
     mk.add_argument("--seed", type=int, default=0)
     sc = sub.add_parser("score")
     sc.add_argument("csv")
+    sc.add_argument("--key", default=None, help="key csv (default: <csv stem>_key.csv)")
     a = ap.parse_args(argv)
     if a.cmd == "make":
         cfgs = [c for g in a.grid for c in load_grid(g)]
         make_audit_sheet(cfgs, a.out, n=a.n, seed=a.seed)
     else:
-        score_audit(a.csv)
+        score_audit(a.csv, key=a.key)
 
 
 if __name__ == "__main__":
