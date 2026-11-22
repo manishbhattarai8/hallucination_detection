@@ -232,17 +232,26 @@ def _line_fig(df: pd.DataFrame, ds: str, fam: str, path: Path) -> None:
     fig, axes = plt.subplots(1, len(precs), figsize=(3.6 * len(precs), 3.2),
                              sharey=True, squeeze=False)
     for ax, prec in zip(axes[0], precs):
+        plotted: list[np.ndarray] = []
         for det in DETECTORS:
             g = d[(d.precision == prec) & (d.detector == det)].sort_values("size_b")
+            g = g[np.isfinite(g.auroc.astype(float))]
             if g.empty:
                 continue
             ax.plot(g.size_b, g.auroc, marker="o", label=det)
-            ax.fill_between(g.size_b, g.auroc_lo, g.auroc_hi, alpha=0.2)
-        ax.set_xscale("log")
+            ci = g[np.isfinite(g.auroc_lo.astype(float)) & np.isfinite(g.auroc_hi.astype(float))]
+            if not ci.empty:
+                ax.fill_between(ci.size_b, ci.auroc_lo, ci.auroc_hi, alpha=0.2)
+            plotted.append(g.size_b.to_numpy(dtype=float))
+        if plotted and (np.concatenate(plotted) > 0).any():
+            ax.set_xscale("log")
+        if not plotted:
+            ax.text(0.5, 0.5, "n/a", ha="center", va="center", transform=ax.transAxes)
         ax.set_xlabel("size (B params)")
         ax.set_title(prec, fontsize=9)
     axes[0][0].set_ylabel("AUROC")
-    axes[0][0].legend(fontsize=7)
+    if axes[0][0].get_legend_handles_labels()[0]:
+        axes[0][0].legend(fontsize=7)
     fig.suptitle(f"{ds}, {fam}", fontsize=9)
     fig.tight_layout()
     fig.savefig(path)

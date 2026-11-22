@@ -40,13 +40,16 @@ def _cfg(tmp_path, precision, size_b=0.5, dataset="triviaqa", excluded=False):
                      results_root=str(tmp_path), timing_excluded=excluded)
 
 
-def _fake_run(tmp_path, monkeypatch, cfg, seed, null_row=None, degenerate=False, chosen_pos=1):
+def _fake_run(tmp_path, monkeypatch, cfg, seed, null_row=None, degenerate=False, chosen_pos=1,
+              test_class=None):
     monkeypatch.setattr(D, "load_questions",
                         lambda c, *a, **k: [Question(q, "q?", ("a",)) for q in QIDS])
     rd = run_dir(cfg)
     rng = np.random.default_rng(seed)
     y = rng.integers(0, 2, N)
     y[:4] = [0, 1, 0, 1]
+    if test_class is not None:
+        y[D.split_index(cfg, QIDS)["test"]] = test_class
     acts = rng.normal(size=(N, 4, 6)).astype(np.float16)
     acts[:, chosen_pos, 0] += 2 * y
     (rd / "acts").mkdir(exist_ok=True)
@@ -183,3 +186,29 @@ def test_missing_csv_header_only_when_complete(tmp_path, two_runs):
     evaluate_grid(two_runs, out_dir=tmp_path / "summary")
     m = pd.read_csv(tmp_path / "summary/missing.csv")
     assert len(m) == 0 and list(m.columns) == ["config_id", "table", "reason"]
+
+
+def _figs(tmp_path):
+    f = tmp_path / "summary/figures"
+    return list(f.glob("heatmap_*.pdf")), list(f.glob("auroc_vs_size_*.pdf"))
+
+
+def test_figures_survive_all_nan_auroc(tmp_path, monkeypatch):
+    c = _cfg(tmp_path, "fp16")
+    _fake_run(tmp_path, monkeypatch, c, 1, test_class=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        evaluate_grid([c], out_dir=tmp_path / "summary")
+    hm, ln = _figs(tmp_path)
+    assert len(hm) == 4 and len(ln) == 1
+    m = pd.read_csv(tmp_path / "summary/metrics.csv")
+    assert m[m.split == "test"].auroc.isna().all()
+
+
+def test_line_figure_single_size(tmp_path, monkeypatch):
+    c = _cfg(tmp_path, "fp16")
+    _fake_run(tmp_path, monkeypatch, c, 1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        evaluate_grid([c], out_dir=tmp_path / "summary")
+    assert len(_figs(tmp_path)[1]) == 1
