@@ -74,6 +74,15 @@ def load_questions(cfg: RunConfig, subset_dir="data/subsets") -> list[Question]:
     allq = _load_all(cfg.dataset)
     if path.exists():
         ids = json.loads(path.read_text(encoding="utf-8"))
+        problem = None
+        if len(ids) != cfg.n_questions:
+            problem = f"has {len(ids)} ids, expected {cfg.n_questions}"
+        elif len(set(ids)) != len(ids):
+            problem = "contains duplicate ids"
+        elif any(i not in allq for i in ids):
+            problem = "contains ids absent from the dataset"
+        if problem:
+            raise ValueError(f"stale subset file {path}: {problem}")
     else:
         ids = select_subset(list(allq), cfg.n_questions, cfg.subset_seed)
         write_json(path, ids)

@@ -1,8 +1,10 @@
 import dataclasses
+import json
 
 import pytest
 
 from hallu.config import load_grid
+import hallu.data as hd
 from hallu.data import (FEW_SHOT, SYSTEM_PROMPT, build_messages, load_questions,
                         select_subset, split_ids)
 
@@ -33,6 +35,18 @@ def test_load_triviaqa_subset_saved_and_reused(tmp_path):
     cfg = dataclasses.replace(load_grid("configs/smoke.yaml")[0], n_questions=10)
     qs = load_questions(cfg, subset_dir=tmp_path)
     assert len(qs) == 10 and all(q.aliases for q in qs)
-    assert (tmp_path / "triviaqa_n10_seed0.json").exists() or list(tmp_path.glob("*.json"))
+    f = tmp_path / "triviaqa_n10_seed0.json"
+    assert f.exists() and json.loads(f.read_text(encoding="utf-8")) == [q.qid for q in qs]
     qs2 = load_questions(cfg, subset_dir=tmp_path)
     assert [q.qid for q in qs] == [q.qid for q in qs2]
+
+
+@pytest.mark.parametrize("ids", [["a", "b"], ["a", "b", "zzz"], ["a", "a", "b"]])
+def test_stale_subset_file_raises_value_error(tmp_path, monkeypatch, ids):
+    fake = {k: hd.Question(k, f"q{k}", ("x",)) for k in "abcd"}
+    monkeypatch.setattr(hd, "_load_all", lambda dataset: fake)
+    cfg = dataclasses.replace(load_grid("configs/smoke.yaml")[0], n_questions=3)
+    f = tmp_path / "triviaqa_n3_seed0.json"
+    f.write_text(json.dumps(ids), encoding="utf-8")
+    with pytest.raises(ValueError, match="triviaqa_n3_seed0.json"):
+        hd.load_questions(cfg, subset_dir=tmp_path)
