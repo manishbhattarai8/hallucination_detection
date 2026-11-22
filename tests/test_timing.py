@@ -127,6 +127,19 @@ def test_timing_smoke(tmp_path):
     generate_run(cfg)
     grade_run(cfg)
     detect_run(cfg)
+    # N=20 makes the real probe degenerate (single-class val split), and timing_run
+    # rightly refuses that, so install a usable synthetic probe on the last saved layer.
+    import json
+
+    from hallu.detectors.probe import make_probe
+    from hallu.generate import load_acts
+
+    rd = run_dir(cfg)
+    _, acts = load_acts(rd)
+    probe = make_probe().fit(acts[:, -1, :].astype(np.float32), np.arange(len(acts)) % 2)
+    joblib.dump(probe, rd / "probe.joblib")
+    (rd / "probe.json").write_text(json.dumps({
+        "layer_val_auroc": {}, "chosen_frac": 1.0, "chosen_layer_pos": acts.shape[1] - 1}))
     out = timing_run(cfg, n_warmup=1, n_timed=3)
     rows = read_jsonl(out)
     assert len(rows) == 4 and rows[-1]["summary"] is True
