@@ -137,6 +137,23 @@ def _sample_flagged(model, tok, q: Question, cfg: RunConfig) -> tuple[list[str],
     return samples, flag.nonfinite
 
 
+MAX_CONSECUTIVE_SAMPLE_FAILS = 3
+
+
+def _sample_or_fallback(model, tok, q: Question, cfg: RunConfig) -> tuple[list[str], bool, bool]:
+    """(samples, nonfinite, sample_failed). Only torch.multinomial's "probability tensor"
+    error falls back to empty samples; OOM and every other error propagate."""
+    try:
+        samples, bad = _sample_flagged(model, tok, q, cfg)
+    except torch.OutOfMemoryError:
+        raise
+    except RuntimeError as e:
+        if "probability tensor" not in str(e):
+            raise
+        return [""] * cfg.n_samples, False, True
+    return samples, bad, False
+
+
 def sample_pass(model, tok, q: Question, cfg: RunConfig) -> list[str]:
     return _sample_flagged(model, tok, q, cfg)[0]
 
@@ -175,6 +192,7 @@ def generate_run(cfg: RunConfig, limit: int | None = None) -> Path:
     model, tok = load_model(cfg.model, cfg.precision)
     acts_dir = rd / "acts"
     acts_dir.mkdir(exist_ok=True)
+    consecutive_fail = 0
     for start in range(0, len(todo), cfg.batch_size):
         batch = todo[start:start + cfg.batch_size]
         t0 = time.perf_counter()
@@ -184,15 +202,17 @@ def generate_run(cfg: RunConfig, limit: int | None = None) -> Path:
         rows = []
         for q, g in zip(batch, greedy):
             t0 = time.perf_counter()
-            try:
-                samples, sample_bad = _sample_flagged(model, tok, q, cfg)
-            except RuntimeError:  # last resort: never let one question block the run
-                samples, sample_bad = [""] * cfg.n_samples, True
+            samples, sample_bad, failed = _sample_or_fallback(model, tok, q, cfg)
+            consecutive_fail = consecutive_fail + 1 if failed else 0
+            if consecutive_fail >= MAX_CONSECUTIVE_SAMPLE_FAILS:
+                raise RuntimeError(f"[{cfg.config_id}] sampling failed for "
+                                   f"{consecutive_fail} consecutive questions; aborting")
             rows.append({
                 "qid": g.qid,
                 "answer": g.answer,
                 "empty_answer": g.empty_answer,
                 "nonfinite": g.nonfinite or sample_bad,
+                "sample_failed": failed,
                 "token_logprobs": _finite_or_none(g.token_logprobs),
                 "token_entropies": _finite_or_none(g.token_entropies),
                 "samples": samples,

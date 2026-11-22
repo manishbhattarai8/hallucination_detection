@@ -130,3 +130,65 @@ def test_sample_pass_flags_nonfinite_sampling_logits(monkeypatch):
     model.lm_head.register_forward_hook(lambda m, i, o: torch.full_like(o, float("inf")))
     samples, bad = G._sample_flagged(model, _StubTok(), q, cfg)
     assert len(samples) == 5 and bad
+
+
+def _harness(tmp_path, monkeypatch, n_q=2, batch_size=2):
+    import hallu.generate as G
+    from hallu.data import Question
+
+    model = _tiny_llama()
+    qs = [Question(f"q{i}", f"question {i}", ("x",)) for i in range(n_q)]
+    monkeypatch.setattr(G, "load_model", lambda *a: (model, _StubTok()))
+    monkeypatch.setattr(G, "load_questions", lambda cfg: qs)
+    cfg = replace(load_grid("configs/smoke.yaml")[0], results_root=str(tmp_path),
+                  max_new_tokens=4, batch_size=batch_size)
+    return G, cfg
+
+
+def test_sampling_oom_is_not_swallowed(tmp_path, monkeypatch):
+    import torch
+
+    G, cfg = _harness(tmp_path, monkeypatch)
+
+    def oom(*a, **k):
+        raise torch.OutOfMemoryError("CUDA out of memory")
+
+    monkeypatch.setattr(G, "_sample_flagged", oom)
+    with pytest.raises(torch.OutOfMemoryError):
+        G.generate_run(cfg)
+    assert not (run_dir(cfg) / "generations.jsonl").exists()
+
+
+def test_sampling_other_runtime_error_reraised(tmp_path, monkeypatch):
+    G, cfg = _harness(tmp_path, monkeypatch)
+    monkeypatch.setattr(G, "_sample_flagged",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("device-side assert")))
+    with pytest.raises(RuntimeError, match="device-side"):
+        G.generate_run(cfg)
+
+
+def test_probability_tensor_error_falls_back_with_sample_failed(tmp_path, monkeypatch):
+    G, cfg = _harness(tmp_path, monkeypatch, n_q=3, batch_size=1)
+    real = G._sample_flagged
+
+    def flaky(model, tok, q, c):
+        if q.qid == "q1":
+            raise RuntimeError("probability tensor contains either `inf`, `nan` or element < 0")
+        return real(model, tok, q, c)
+
+    monkeypatch.setattr(G, "_sample_flagged", flaky)
+    G.generate_run(cfg)
+    rows = {r["qid"]: r for r in read_jsonl(run_dir(cfg) / "generations.jsonl")}
+    assert len(rows) == 3
+    assert rows["q1"]["sample_failed"] is True and rows["q1"]["samples"] == [""] * 5
+    assert rows["q1"]["nonfinite"] is False
+    assert rows["q0"]["sample_failed"] is False and rows["q2"]["sample_failed"] is False
+
+
+def test_three_consecutive_sampling_fallbacks_abort(tmp_path, monkeypatch):
+    G, cfg = _harness(tmp_path, monkeypatch, n_q=4, batch_size=1)
+    monkeypatch.setattr(G, "_sample_flagged", lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("probability tensor contains either `inf`, `nan` or element < 0")))
+    with pytest.raises(RuntimeError, match="consecutive"):
+        G.generate_run(cfg)
+    assert len(read_jsonl(run_dir(cfg) / "generations.jsonl")) == 2

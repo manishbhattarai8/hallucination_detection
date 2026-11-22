@@ -116,3 +116,17 @@ def test_split_index_positions(tmp_path, monkeypatch):
     sp = split_ids(qids, cfg.split_seed)
     for k in ("train", "val", "test"):
         assert [sub[i] for i in si[k]] == [q for q in sub if q in set(sp[k])]
+
+
+def test_sample_failed_rows_have_null_semantic_entropy(tmp_path, monkeypatch):
+    cfg, rd, qids = _build(tmp_path, monkeypatch)
+    rows = read_jsonl(rd / "generations.jsonl")
+    for r in rows:
+        r["sample_failed"] = r["qid"] == "q003"
+    (rd / "generations.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    judge = StubJudge()
+    D.detect_run(cfg, nli=judge)
+    sc = {r["qid"]: r for r in read_jsonl(rd / "scores.jsonl")}
+    assert sc["q003"]["semantic_entropy"] is None and sc["q003"]["n_clusters"] is None
+    assert sc["q003"]["neg_mean_logprob"] == 1.0
+    assert sc["q004"]["semantic_entropy"] == 0.0 and len(judge.calls) == 49

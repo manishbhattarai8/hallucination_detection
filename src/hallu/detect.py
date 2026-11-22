@@ -93,13 +93,17 @@ def detect_run(cfg: RunConfig, nli: NLIJudge | None = None) -> Path:
         nli = NLIJudge()
     for g in todo:
         nf = bool(g.get("nonfinite"))
-        ent, ncl = nli.semantic_entropy(qtext[g["qid"]], [g["answer"]] + list(g["samples"]))
+        if g.get("sample_failed"):  # samples are placeholders: no semantic entropy
+            ent, ncl = None, None
+        else:
+            ent, ncl = nli.semantic_entropy(qtext[g["qid"]], [g["answer"]] + list(g["samples"]))
+            ncl = int(ncl)
         append_jsonl(scores_path, [{
             "qid": g["qid"],
             "neg_mean_logprob": _conf(neg_mean_logprob, g["token_logprobs"], nf),
             "mean_entropy": _conf(mean_entropy, g["token_entropies"], nf),
             "semantic_entropy": _clean(ent),
-            "n_clusters": int(ncl),
+            "n_clusters": ncl,
             "probe": None,
         }])
     if not scores_path.exists():
