@@ -41,7 +41,7 @@ def _cfg(tmp_path, precision, size_b=0.5, dataset="triviaqa", excluded=False):
 
 
 def _fake_run(tmp_path, monkeypatch, cfg, seed, null_row=None, degenerate=False, chosen_pos=1,
-              test_class=None):
+              test_class=None, se_null_row=None):
     monkeypatch.setattr(D, "load_questions",
                         lambda c, *a, **k: [Question(q, "q?", ("a",)) for q in QIDS])
     rd = run_dir(cfg)
@@ -68,7 +68,7 @@ def _fake_run(tmp_path, monkeypatch, cfg, seed, null_row=None, degenerate=False,
         if probe is not None and i in test_pos:
             pr = float(probe.predict_proba(acts[i:i + 1, chosen_pos, :].astype(np.float32))[0, 1])
         rows.append({"qid": q, "neg_mean_logprob": None if i == null_row else float(sc[0]),
-                     "mean_entropy": float(sc[1]), "semantic_entropy": float(sc[2]),
+                     "mean_entropy": float(sc[1]), "semantic_entropy": None if i == se_null_row else float(sc[2]),
                      "n_clusters": 2, "probe": pr})
     append_jsonl(rd / "scores.jsonl", rows)
     pj = {"layer_val_auroc": {"0.25": 0.5},
@@ -226,3 +226,24 @@ def test_partial_run_evaluated_but_flagged(tmp_path, monkeypatch):
     assert list(r.reason) == ["run incomplete (40/60)"]
     m = pd.read_csv(tmp_path / "summary/metrics.csv")
     assert (m[(m.split == "all") & (m.detector == "mean_entropy")].n == 40).all()
+
+
+def test_transfer_drops_nonfinite_acts(tmp_path, monkeypatch):
+    c16, c4 = _cfg(tmp_path, "fp16"), _cfg(tmp_path, "nf4")
+    _fake_run(tmp_path, monkeypatch, c16, 1)
+    _fake_run(tmp_path, monkeypatch, c4, 2)
+    shard = run_dir(c4) / "acts" / "shard_00000.npz"
+    with np.load(shard) as z:
+        q, a = z["qids"], z["acts"].copy()
+    test = D.split_index(c4, QIDS)["test"]
+    a[test[0], 1, 2] = np.nan
+    a[test[1], 1, 0] = np.inf
+    a[test[2], 3, 0] = np.nan  # not the chosen layer: kept
+    np.savez(shard, qids=q, acts=a)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        evaluate_grid([c16, c4], out_dir=tmp_path / "summary")
+    t = pd.read_csv(tmp_path / "summary/transfer.csv")
+    assert len(t) == 1 and t.n_dropped_nonfinite_acts.iloc[0] == 2
+    assert np.isfinite(t.auroc.iloc[0])
+

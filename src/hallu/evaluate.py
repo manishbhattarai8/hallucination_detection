@@ -17,7 +17,7 @@ import pandas as pd  # noqa: E402
 from sklearn.metrics import average_precision_score, roc_auc_score  # noqa: E402
 
 from hallu.config import RunConfig  # noqa: E402
-from hallu.detect import split_index  # noqa: E402
+from hallu.detect import finite_act_rows, split_index  # noqa: E402
 from hallu.generate import load_acts  # noqa: E402
 from hallu.io import read_jsonl  # noqa: E402
 
@@ -146,13 +146,15 @@ def _transfer_rows(cfgs: list[RunConfig], data: dict, missing: list) -> list[dic
             test = split_index(other, kq)["test"]
             if len(test) == 0:
                 continue
-            x = np.asarray(acts[keep][test][:, pos, :], dtype=np.float32)
-            y = np.array([labels[kq[i]] for i in test])
-            s = probe.predict_proba(x)[:, 1]
-            f = _ci_fields(y, s)
+            a = acts[keep][test]
+            ok = finite_act_rows(a, pos)  # same rule as the probe step, at the chosen layer
+            x = np.asarray(a[ok][:, pos, :], dtype=np.float32)
+            y = np.array([labels[kq[i]] for i in test])[ok]
+            f = _ci_fields(y, probe.predict_proba(x)[:, 1]) if len(x) else                 {"auroc": math.nan, "auroc_lo": math.nan, "auroc_hi": math.nan}
             rows.append({"family": fam, "size_b": size, "dataset": ds, "test_precision": tp,
                          "chosen_frac": meta.get("chosen_frac"),
-                         "auroc": f["auroc"], "auroc_lo": f["auroc_lo"], "auroc_hi": f["auroc_hi"]})
+                         "auroc": f["auroc"], "auroc_lo": f["auroc_lo"], "auroc_hi": f["auroc_hi"],
+                         "n_dropped_nonfinite_acts": int((~ok).sum())})
     return rows
 
 
@@ -288,7 +290,8 @@ def evaluate_grid(cfgs: list[RunConfig], out_dir="results/summary") -> None:
                                  "accuracy", "n_correct"]).to_csv(out / "accuracy.csv", index=False)
     pd.DataFrame(_transfer_rows(cfgs, data, missing),
                  columns=["family", "size_b", "dataset", "test_precision", "chosen_frac", "auroc",
-                          "auroc_lo", "auroc_hi"]).to_csv(out / "transfer.csv", index=False)
+                          "auroc_lo", "auroc_hi", "n_dropped_nonfinite_acts"]).to_csv(
+        out / "transfer.csv", index=False)
     cost = _cost_rows(cfgs, metrics, missing)
     if cost:
         pd.DataFrame(cost).to_csv(out / "cost.csv", index=False)

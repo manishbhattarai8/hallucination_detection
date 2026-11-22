@@ -145,3 +145,21 @@ def test_probe_skipped_on_partial_run_then_trained_when_complete(tmp_path, monke
     pj = json.loads((rd / "probe.json").read_text())
     assert pj["chosen_layer_pos"] == 2 and pj["n_train_qids"] == 50 and pj["n_total"] == 50
     assert any(r["probe"] is not None for r in read_jsonl(rd / "scores.jsonl"))
+
+
+def test_nonfinite_acts_dropped_from_probe(tmp_path, monkeypatch):
+    cfg, rd, qids = _build(tmp_path, monkeypatch)
+    shard = rd / "acts" / "shard_00000.npz"
+    with np.load(shard) as z:
+        q, a = z["qids"], z["acts"].copy()
+    test_q = sorted(split_ids(qids, cfg.split_seed)["test"])
+    i_nan, i_inf = qids.index(test_q[0]), qids.index("q010")
+    a[i_nan, 0, 3] = np.nan
+    a[i_inf, 3, 1] = np.inf
+    np.savez(shard, qids=q, acts=a)
+    D.detect_run(cfg, nli=StubJudge())
+    pj = json.loads((rd / "probe.json").read_text())
+    assert pj["n_dropped_nonfinite_acts"] == 2 and pj["n_train_qids"] == 48
+    assert pj["chosen_layer_pos"] >= 0 and (rd / "probe.joblib").exists()
+    rows = {r["qid"]: r for r in read_jsonl(rd / "scores.jsonl")}
+    assert rows[test_q[0]]["probe"] is None and rows[test_q[1]]["probe"] is not None

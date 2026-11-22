@@ -40,6 +40,12 @@ def split_index(cfg: RunConfig, qids: list[str]) -> dict[str, np.ndarray]:
             for k, s in sp.items()}
 
 
+def finite_act_rows(acts: np.ndarray, pos: int | None = None) -> np.ndarray:
+    """Bool mask of rows whose activations are all finite (at layer position `pos`, or all)."""
+    a = acts if pos is None else acts[:, pos, :]
+    return np.isfinite(a.reshape(len(a), -1).astype(np.float32)).all(axis=1)
+
+
 def _dump(obj) -> str:
     return json.dumps(obj, allow_nan=False)
 
@@ -56,6 +62,10 @@ def _probe_step(cfg: RunConfig, rd: Path, scores_path: Path) -> None:
     if len(keep) < len(full):
         print(f"[{cfg.config_id}] probe skipped: {len(keep)}/{len(full)} labeled", flush=True)
         return
+    # every saved layer is a candidate, so a row needs finite acts at all of them
+    ok = finite_act_rows(acts[keep]) if keep else np.zeros(0, dtype=bool)
+    n_dropped = int((~ok).sum())
+    keep = [i for i, good in zip(keep, ok) if good]
     kq = [a_qids[i] for i in keep]
     y = np.array([labels[q] for q in kq], dtype=int)
     x = acts[keep] if keep else acts[:0]
@@ -85,6 +95,7 @@ def _probe_step(cfg: RunConfig, rd: Path, scores_path: Path) -> None:
         "chosen_layer_pos": int(res.chosen_layer_pos),
         "n_train_qids": len(kq),
         "n_total": len(full),
+        "n_dropped_nonfinite_acts": n_dropped,
     }
     probe_json.write_text(_dump(meta), encoding="utf-8")
 
