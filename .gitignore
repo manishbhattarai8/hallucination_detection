@@ -1,1 +1,8 @@
 .superpowers/
+.venv/
+results/
+results_smoke/
+data/cache/
+__pycache__/
+*.egg-info/
+.pytest_cache/

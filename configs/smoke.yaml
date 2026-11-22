@@ -1,0 +1,16 @@
+family: qwen2.5
+models:
+  - {id: Qwen/Qwen2.5-0.5B-Instruct, size_b: 0.5, batch_size: 4}
+precisions: [fp16]
+datasets: [triviaqa]
+timing_exclude: []
+defaults:
+  n_questions: 20
+  subset_seed: 0
+  split_seed: 0
+  sample_seed: 1
+  n_samples: 5
+  temperature: 1.0
+  max_new_tokens: 32
+  layer_fracs: [0.25, 0.5, 0.75, 1.0]
+  results_root: results_smoke
