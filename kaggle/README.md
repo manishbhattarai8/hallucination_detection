@@ -4,15 +4,27 @@ All reported experiments run on Kaggle. Budget: about 30 GPU-hours per week, 12 
 
 ## One-time setup
 1. Create a notebook at kaggle.com -> Code -> New Notebook.
-2. Settings -> Accelerator: **GPU T4** (single). Use **GPU T4 x2** only for `qwen2.5-7b_fp16_*` configs.
+2. Settings -> Accelerator: **GPU T4 x2** (Kaggle's only T4 option; P100 is retired). Keep `USE_ALL_GPUS = False` (first cell): every stage then runs with `CUDA_VISIBLE_DEVICES=0`, i.e. on a single T4, as the design requires (otherwise `device_map="auto"` would split even small models over both GPUs, and the timing stage refuses more than one GPU). Set `USE_ALL_GPUS = True` only for `qwen2.5-7b_fp16_*` configs, whose fp16 weights do not fit one T4; their timings are excluded from the cost comparison.
 3. Settings -> Internet: **On** (phone verification is required once).
-4. Add-ons -> Secrets: add `HF_TOKEN` (your Hugging Face token) and tick it for this notebook. Your Llama licenses must already be approved.
+4. Add-ons -> Secrets: add `HF_TOKEN` (your Hugging Face token) and tick it **for this notebook** (secrets are attached per notebook). Required for Llama (licenses must already be approved); Qwen models are public, so without it the runner prints a warning and continues.
 5. Load the runner: File -> Import Notebook and pick `kaggle/run_on_kaggle.py`, or paste each `# %%` cell into its own cell.
+
+### Alternative: push from your machine with the Kaggle CLI
+1. `pip install kaggle six` (CLI 2.x). Create a token at kaggle.com -> Settings -> API -> Create New Token. A single-line token (not JSON) goes in `~/.kaggle/access_token`; an older JSON `kaggle.json` stays in `~/.kaggle/kaggle.json`. Check with `kaggle config view`.
+2. Make a folder with a copy of `run_on_kaggle.py` (edit its first cell) and a `kernel-metadata.json`:
+   ```json
+   {"id": "<username>/hallu-pilot", "title": "hallu-pilot", "code_file": "run_on_kaggle.py",
+    "language": "python", "kernel_type": "script", "is_private": true,
+    "enable_gpu": true, "enable_internet": true, "machine_shape": "NvidiaTeslaT4",
+    "dataset_sources": [], "competition_sources": [], "kernel_sources": [], "model_sources": []}
+   ```
+3. `kaggle kernels push -p <folder> --accelerator NvidiaTeslaT4`, then `kaggle kernels status <username>/hallu-pilot` and, when complete, `kaggle kernels output <username>/hallu-pilot -p <dest>`.
+4. CLI-pushed notebooks get no secrets. For Llama runs, open the notebook on kaggle.com once and tick `HF_TOKEN` under Add-ons -> Secrets.
 6. Edit the first cell: `GRID`, `CONFIG_IDS` (empty list = whole grid), `STAGES`. Run all cells.
 
 `LIMIT` is for smoke testing only, into a scratch results root (e.g. `GRID = "configs/smoke.yaml"`, which writes to `results_smoke/`). Keep `LIMIT = None` for real runs: the probe is trained only once every subset question is generated and labeled (otherwise detect prints `probe skipped: n/N labeled`), and evaluate flags partial runs in `missing.csv` as `run incomplete (n/N)`.
 
-The runner clones the repo to `/kaggle/working/hallucination`, installs `requirements.txt` without the `numpy==` and `torch` lines (Kaggle's torch build needs its own numpy; this is done automatically), asserts a T4, logs in to Hugging Face, runs `scripts/run_stage.py`, and zips results. If you run it manually and a pinned numpy conflicts: `pip install -r <(grep -v numpy requirements.txt)`.
+The runner clones the repo to `/kaggle/working/hallucination`, installs `requirements.txt` without the `numpy==` and `torch` lines (Kaggle's torch build needs its own numpy; this is done automatically), asserts a T4, logs in to Hugging Face if `HF_TOKEN` is attached, runs `scripts/run_stage.py` (pinned to one GPU unless `USE_ALL_GPUS`), and zips results. If you run it manually and a pinned numpy conflicts: `pip install -r <(grep -v numpy requirements.txt)`.
 
 ## First run: the pilot
 `GRID = "configs/qwen.yaml"`, `CONFIG_IDS = ["qwen2.5-0.5b_fp16_triviaqa", "qwen2.5-3b_nf4_triviaqa"]`, `STAGES = ["all"]`. Use its wall time x 24 configs (+6 Llama) to estimate the quota. If over about 30 GPU-h, set `n_questions: 1000` in both grids before any full run.
