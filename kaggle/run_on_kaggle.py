@@ -12,6 +12,8 @@ LIMIT = None                      # smoke tests only (GRID = "configs/smoke.yaml
 PREV_RESULTS = None               # e.g. "/kaggle/input/hallu-results/hallucination/results" to resume
 MAKE_ZIP = False                  # True only on the final session (zip doubles stored size)
 TIME_BUDGET_H = 11                # stop cleanly before Kaggle's 12 h cap (counted from this cell)
+USE_ALL_GPUS = False              # Kaggle's T4 accelerator is "T4 x2". False pins stages to one T4
+                                  # (the design's single-T4 setup); True only for qwen2.5-7b_fp16_*
 
 import time
 
@@ -59,7 +61,13 @@ assert "T4" in gpu, f"expected a T4, got {gpu}"
 from huggingface_hub import login
 from kaggle_secrets import UserSecretsClient
 
-login(UserSecretsClient().get_secret("HF_TOKEN"))
+# Notebooks pushed via the Kaggle CLI have no secrets attached. Qwen models are public,
+# so continue without a token; gated Llama models need HF_TOKEN ticked in notebook settings.
+try:
+    login(UserSecretsClient().get_secret("HF_TOKEN"))
+except Exception as e:
+    print(f"HF_TOKEN not available ({type(e).__name__}); continuing without Hugging Face login. "
+          "Attach the HF_TOKEN secret before running gated (Llama) models.")
 
 # %% [6] Resume from an attached Dataset (optional), then run
 import glob
@@ -88,6 +96,11 @@ if PREV_RESULTS:
             n_rows += sum(1 for _ in f)
     print(f"restored from {src}: {n_gen} run dirs with generations, {n_rows} generation rows")
 
+stage_env = dict(os.environ)
+if not USE_ALL_GPUS:
+    stage_env["CUDA_VISIBLE_DEVICES"] = "0"
+print("stages see GPUs:", stage_env.get("CUDA_VISIBLE_DEVICES", "all"))
+
 for stage in STAGES:
     left_h = TIME_BUDGET_H - (time.monotonic() - SESSION_START) / 3600
     if left_h <= 0:
@@ -100,7 +113,7 @@ for stage in STAGES:
     if LIMIT:
         cmd += ["--limit", str(LIMIT)]
     print("$", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=stage_env)
 
 # %% [7] Optional zip (off by default: it would be stored again in every saved version)
 if MAKE_ZIP:
