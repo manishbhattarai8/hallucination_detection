@@ -1,6 +1,7 @@
 """Model loading and per-token statistics."""
 from __future__ import annotations
 
+import gc
 from typing import Iterable, Sequence
 
 import torch
@@ -31,6 +32,13 @@ def load_model(model_id: str, precision: str):
         }
     else:
         raise ValueError(f"unknown precision: {precision!r}")
+
+    # Release the previous config's model first. device_map="auto" plans from *free*
+    # GPU memory; unreclaimed or allocator-cached memory would make it offload layers
+    # to CPU (seen as OOM for 7B fp16 on 2x T4 when it was the second config).
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="left")
     if tokenizer.pad_token is None:

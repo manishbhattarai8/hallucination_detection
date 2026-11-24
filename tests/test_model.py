@@ -90,3 +90,37 @@ def test_truncate_answer_ids_extra_stop_ids(fake_tokenizer):
     assert truncate_answer_ids([3, 4, 9, 7], fake_tokenizer) == [3, 4, 9, 7]
     assert truncate_answer_ids([3, 4, 9, 7], fake_tokenizer, stop_ids=[9]) == [3, 4]
     assert truncate_answer_ids([3, 0, 7], fake_tokenizer, stop_ids=[9]) == [3]  # eos still stops
+
+
+def test_load_model_frees_gpu_memory_before_loading(monkeypatch):
+    """A previous config's model must be released before device_map='auto' plans the
+    next load; otherwise cached/unreclaimed memory looks 'used' and layers get
+    offloaded to CPU (7B fp16 OOM on Kaggle T4 x2)."""
+    import gc
+
+    import transformers
+
+    from hallu import model as model_mod
+
+    calls = []
+    monkeypatch.setattr(gc, "collect", lambda *a, **k: calls.append("gc") or 0)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+
+    class _Tok:
+        pad_token = "<pad>"
+
+    class _Model:
+        def eval(self):
+            return self
+
+    def fake_model_load(*a, **k):
+        calls.append("load")
+        return _Model()
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *a, **k: _Tok())
+    monkeypatch.setattr(transformers.AutoModelForCausalLM, "from_pretrained", fake_model_load)
+
+    model_mod.load_model("dummy/model", "fp16")
+    assert calls.index("gc") < calls.index("load")
+    assert calls.index("empty_cache") < calls.index("load")
