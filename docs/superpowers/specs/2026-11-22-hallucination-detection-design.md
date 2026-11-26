@@ -127,11 +127,22 @@ serves as the fp16 baseline for 7B cross-precision probe transfer, but its timin
      train/val/test (same split across configs); pick layer on val, report on test.
    - **Cross-precision transfer** (key quantization analysis): train probe on fp16
      activations, test on int8/nf4 activations of the same model.
+   - **Amendment 2026-11-24 — 5-fold cross-validated probe (`probe_cv`)** *(approved by the
+     author after the full Qwen grid)*: NQ-Open accuracy is low (7–22%), leaving only 25–64
+     correct answers in the 300-question test split, so single-split probe AUROC CIs were
+     ±0.08–0.10. Each question is now assigned to one of 5 folds (fixed by qid with
+     `split_seed`, identical across configs). For each fold: pick the layer on a random 25%
+     inner holdout of the other 4 folds, refit at that layer on all 4, score the held-out
+     fold. Every question gets an out-of-fold score, so the probe is reported on all
+     N = 1,500 like the training-free detectors. Transfer uses the same folds: fold-k fp16
+     probe scores fold-k questions of the int8/nf4 sibling. Runs on CPU from saved
+     activations (`--stage probe_cv`). The single-split probe is kept for comparison.
 
 ### 5.7 Metrics
 - **AUROC** (primary), **AUPRC** (secondary), with **95% bootstrap CIs** (1,000 resamples).
   For probes, metrics are on the test split; for training-free detectors, report on the same
-  test split (for comparability) and on all N.
+  test split (for comparability) and on all N. *(Amended 2026-11-24: the primary comparison
+  is all N = 1,500 for every detector, with the probe as `probe_cv`; test-split rows are kept.)*
 - **Cost** — measured in a **separate, controlled timing run** *(builder's call)*, not from
   the main generation logs (whose batch sizes vary per config):
   - Single T4, **batch size 1**, a fixed subset of **100 questions** (first 100 of the TriviaQA

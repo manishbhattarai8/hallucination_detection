@@ -51,3 +51,14 @@ def test_deadline_passed_to_stages(monkeypatch):
     monkeypatch.setattr(run_stage, "evaluate_grid", lambda cfgs, out_dir: None)
     assert main(["--grid", GRID, "--stage", "all", "--deadline-hours", "2"]) == 0
     assert isinstance(calls[0][1]["deadline"], float) and calls[2][1]["deadline"] == calls[0][1]["deadline"]
+
+
+def test_probe_cv_stage_gives_fp16_its_quantized_siblings(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(run_stage, "probe_cv_run",
+                        lambda cfg, siblings=(): calls.append((cfg.config_id, [s.config_id for s in siblings])))
+    qwen = str(Path(__file__).resolve().parents[1] / "configs" / "qwen.yaml")
+    assert main(["--grid", qwen, "--stage", "probe_cv",
+                 "--config-id", "qwen2.5-3b_fp16_nq_open"]) == 0
+    assert calls == [("qwen2.5-3b_fp16_nq_open",
+                      ["qwen2.5-3b_int8_nq_open", "qwen2.5-3b_nf4_nq_open"])]

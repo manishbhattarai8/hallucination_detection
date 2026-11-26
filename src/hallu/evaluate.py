@@ -21,7 +21,7 @@ from hallu.detect import finite_act_rows, split_index  # noqa: E402
 from hallu.generate import load_acts  # noqa: E402
 from hallu.io import read_jsonl  # noqa: E402
 
-DETECTORS = ["neg_mean_logprob", "mean_entropy", "semantic_entropy", "probe"]
+DETECTORS = ["neg_mean_logprob", "mean_entropy", "semantic_entropy", "probe", "probe_cv"]
 PRECISIONS = ["fp16", "int8", "nf4"]
 _NAN3 = (math.nan, math.nan, math.nan)
 _FN = {"auroc": roc_auc_score, "auprc": average_precision_score}
@@ -69,6 +69,10 @@ def _load(cfg: RunConfig):
     sc = pd.DataFrame(read_jsonl(rd / "scores.jsonl"))
     sc = sc[sc.qid.isin(labels)].reset_index(drop=True)
     sc["label"] = sc.qid.map(labels)
+    cv = rd / "probe_cv.jsonl"
+    if cv.exists():  # out-of-fold probe score for every question (probe_cv stage)
+        cvs = {r["qid"]: r["probe_cv"] for r in read_jsonl(cv)}
+        sc["probe_cv"] = sc.qid.map(cvs)
     return labels, sc
 
 
@@ -177,9 +181,26 @@ def _transfer_rows(cfgs: list[RunConfig], data: dict, missing: list) -> list[dic
             else:
                 f = {"auroc": math.nan, "auroc_lo": math.nan, "auroc_hi": math.nan}
             rows.append({"family": fam, "size_b": size, "dataset": ds, "test_precision": tp,
+                         "method": "split", "n": int(len(x)),
                          "chosen_frac": meta.get("chosen_frac"),
                          "auroc": f["auroc"], "auroc_lo": f["auroc_lo"], "auroc_hi": f["auroc_hi"],
                          "n_dropped_nonfinite_acts": int((~ok).sum())})
+    # cross-validated transfer (probe_cv stage): fp16 fold probes on every question
+    for c in cfgs:
+        path = Path(c.results_root) / c.config_id / "probe_transfer_cv.jsonl"
+        if c.precision == "fp16" or c.config_id not in data or not path.exists():
+            continue
+        labels = data[c.config_id][0]
+        tr = [r for r in read_jsonl(path) if r["qid"] in labels]
+        y = np.array([labels[r["qid"]] for r in tr])
+        s = np.array([r["probe_transfer_cv"] for r in tr], dtype=float)
+        f = _ci_fields(y, s) if len(tr) else {"auroc": math.nan, "auroc_lo": math.nan,
+                                              "auroc_hi": math.nan}
+        rows.append({"family": c.family, "size_b": c.size_b, "dataset": c.dataset,
+                     "test_precision": c.precision, "method": "cv", "n": len(tr),
+                     "chosen_frac": math.nan,  # varies by fold; see the fp16 run's probe_cv.json
+                     "auroc": f["auroc"], "auroc_lo": f["auroc_lo"], "auroc_hi": f["auroc_hi"],
+                     "n_dropped_nonfinite_acts": len(labels) - len(tr)})
     return rows
 
 
@@ -323,7 +344,8 @@ def evaluate_grid(cfgs: list[RunConfig], out_dir="results/summary") -> None:
                                  "accuracy", "n_correct", "n_empty"]).to_csv(
         out / "accuracy.csv", index=False)
     pd.DataFrame(_transfer_rows(cfgs, data, missing),
-                 columns=["family", "size_b", "dataset", "test_precision", "chosen_frac", "auroc",
+                 columns=["family", "size_b", "dataset", "test_precision", "method", "n",
+                          "chosen_frac", "auroc",
                           "auroc_lo", "auroc_hi", "n_dropped_nonfinite_acts"]).to_csv(
         out / "transfer.csv", index=False)
     cost = _cost_rows(cfgs, metrics, missing)
@@ -332,6 +354,9 @@ def evaluate_grid(cfgs: list[RunConfig], out_dir="results/summary") -> None:
     pd.DataFrame(missing, columns=["config_id", "table", "reason"]).to_csv(
         out / "missing.csv", index=False)
     for ds, fam in sorted({(c.dataset, c.family) for c in cfgs if c.config_id in data}):
+        present = set(metrics[(metrics.dataset == ds) & (metrics.family == fam)].detector)
         for det in DETECTORS:
+            if det not in present:  # e.g. probe_cv before the probe_cv stage has run
+                continue
             _heatmap(metrics, det, ds, fam, out / "figures" / f"heatmap_{det}_{ds}_{fam}.pdf")
         _line_fig(metrics, ds, fam, out / "figures" / f"auroc_vs_size_{ds}_{fam}.pdf")

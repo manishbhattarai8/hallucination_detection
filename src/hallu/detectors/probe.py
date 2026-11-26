@@ -63,3 +63,41 @@ def train_select_probe(acts: np.ndarray, labels: np.ndarray,
     x = np.asarray(acts[:, best, :], dtype=np.float32)
     scores = models[best].predict_proba(x[te])[:, 1]
     return ProbeResult(aurocs, layer_fracs[best], best, models[best], scores)
+
+
+@dataclass
+class CVProbeResult:
+    scores: np.ndarray                 # out-of-fold P(hallucinated) per row; NaN if its fold is degenerate
+    chosen_frac: list[float]           # per fold
+    layer_pos: list[int]               # per fold (-1 if degenerate)
+    models: list[Pipeline | None]      # per fold, fit on all of that fold's training rows
+
+
+def cv_probe_scores(acts: np.ndarray, labels: np.ndarray, folds: np.ndarray,
+                    layer_fracs: Sequence[float], seed: int = 0,
+                    inner_val_frac: float = 0.25) -> CVProbeResult:
+    """K-fold probe: for each fold, pick the layer on a random inner holdout of the other
+    folds (train_select_probe), refit at that layer on all of them, score the held-out fold."""
+    labels, folds = np.asarray(labels), np.asarray(folds)
+    scores = np.full(len(labels), np.nan)
+    chosen, pos_l, models = [], [], []
+    for f in sorted(np.unique(folds)):
+        held = np.flatnonzero(folds == f)
+        train = np.flatnonzero(folds != f)
+        perm = np.random.default_rng(seed + int(f)).permutation(train)
+        n_val = int(round(len(perm) * inner_val_frac))
+        split = {"train": perm[n_val:], "val": perm[:n_val], "test": held}
+        sel = train_select_probe(acts, labels, split, layer_fracs)
+        if sel.chosen_layer_pos < 0:
+            chosen.append(math.nan)
+            pos_l.append(-1)
+            models.append(None)
+            continue
+        p = sel.chosen_layer_pos
+        x = np.asarray(acts[:, p, :], dtype=np.float32)
+        m = make_probe().fit(x[train], labels[train])
+        scores[held] = m.predict_proba(x[held])[:, 1]
+        chosen.append(sel.chosen_frac)
+        pos_l.append(p)
+        models.append(m)
+    return CVProbeResult(scores, chosen, pos_l, models)

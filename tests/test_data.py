@@ -67,3 +67,14 @@ def test_dataset_revisions_are_pinned(monkeypatch):
     assert seen == [("mandarjoshi/trivia_qa", hd.TRIVIAQA_REVISION),
                     ("google-research-datasets/nq_open", hd.NQ_OPEN_REVISION)]
     assert all(len(r) == 40 for _, r in seen)
+
+
+def test_fold_ids_deterministic_balanced_order_independent():
+    from hallu.data import fold_ids
+    qids = [f"q{i}" for i in range(103)]
+    a = fold_ids(qids, k=5, seed=0)
+    assert set(a) == set(qids) and set(a.values()) == set(range(5))
+    sizes = sorted(list(a.values()).count(f) for f in range(5))
+    assert sizes[-1] - sizes[0] <= 1
+    assert fold_ids(list(reversed(qids)), k=5, seed=0) == a  # same folds whatever the order
+    assert fold_ids(qids, k=5, seed=1) != a

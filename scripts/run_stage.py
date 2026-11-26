@@ -13,8 +13,9 @@ from hallu.evaluate import evaluate_grid
 from hallu.generate import generate_run
 from hallu.grade import grade_run
 from hallu.timing import timing_run
+from hallu.probe_cv import probe_cv_run
 
-STAGES = ["generate", "grade", "detect", "timing", "evaluate", "all"]
+STAGES = ["generate", "grade", "detect", "timing", "probe_cv", "evaluate", "all"]
 
 
 def main(argv=None) -> int:
@@ -67,6 +68,11 @@ def main(argv=None) -> int:
             if judge is None:
                 judge = NLIJudge()
             detect_run(cfg, nli=judge, deadline=deadline)
+        if a.stage == "probe_cv":  # CPU; needs complete runs (fp16 also scores its siblings)
+            log(cfg, "probe_cv")
+            sibs = [c for c in cfgs if (c.family, c.size_b, c.dataset) ==
+                    (cfg.family, cfg.size_b, cfg.dataset) and c.precision != cfg.precision]
+            probe_cv_run(cfg, siblings=sibs)
         if a.stage == "timing":
             if out_of_time():
                 return 0

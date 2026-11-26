@@ -41,6 +41,14 @@ def split_ids(qids: Sequence[str], seed: int) -> dict[str, list[str]]:
     return {"train": ids[:a], "val": ids[a:b], "test": ids[b:]}
 
 
+def fold_ids(qids: Sequence[str], k: int, seed: int) -> dict[str, int]:
+    """Cross-validation fold (0..k-1) per qid; depends only on the qid set, so pass the
+    full subset to get identical folds across configs."""
+    ids = sorted(qids)
+    random.Random(seed).shuffle(ids)
+    return {q: i % k for i, q in enumerate(ids)}
+
+
 def build_messages(question: str) -> list[dict]:
     msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
     for q, a in FEW_SHOT:
